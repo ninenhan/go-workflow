@@ -37,7 +37,9 @@ func (u *JobUnit) Run(ctx context.Context, input any, current *Unit) (any, error
 			for !p.ReachMaxRetries() {
 				p.Retry()
 				log.Printf("重试第%d次", policy.RetryCount())
-				time.Sleep(policy.RetryDelay())
+				if policy.RetryDelay() > 0 {
+					time.Sleep(policy.RetryDelay())
+				}
 				r, e = u.Job.Execute(ctx, input, current)
 				if e != nil {
 					continue

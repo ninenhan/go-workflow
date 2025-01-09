@@ -23,6 +23,8 @@ type ExecutionState interface {
 	Load() (PipelineState, error)
 }
 
+type StageCallback func(stageName string, status StageStatus, self *Pipeline) bool
+
 // Pipeline 是整个 CI/CD 流水线，包含多个阶段
 type Pipeline struct {
 	ID                string
@@ -36,9 +38,14 @@ type Pipeline struct {
 	currentUnitIndex  int
 	lastOutput        any
 	Results           map[string]any
+	callBack          StageCallback
 }
 
 func (p *Pipeline) Run(ctx context.Context, initialInput any) (any, error) {
+	return p.RunWithCallback(ctx, initialInput, nil)
+}
+
+func (p *Pipeline) RunWithCallback(ctx context.Context, initialInput any, callback StageCallback) (any, error) {
 	input := initialInput
 	for i := p.currentStageIndex; i < len(p.stages); i++ {
 		//for _, stage := range p.stages {
@@ -50,16 +57,10 @@ func (p *Pipeline) Run(ctx context.Context, initialInput any) (any, error) {
 		// 在执行Stage内的Units时，也可能需要参考currentUnitIndex
 		// 并在每个Unit执行完后更新currentUnitIndex
 		// 当Stage完成后，将currentUnitIndex重置，currentStageIndex+1
-		for p.Status == "paused" {
-			p.SaveState()
-			time.Sleep(80 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-			}
-		}
 		// 检查是否暂停
+		if callback != nil {
+			callback(stage.Name, stage.Status, p)
+		}
 		for {
 			p.mu.Lock()
 			if p.Status == "paused" {
@@ -67,21 +68,32 @@ func (p *Pipeline) Run(ctx context.Context, initialInput any) (any, error) {
 				// 保存当前状态
 				p.SaveState()
 				time.Sleep(100 * time.Millisecond)
+				time.Sleep(80 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+				}
 				continue
 			}
 			p.mu.Unlock()
 			break
 		}
+		if callback != nil {
+			callback(stage.Name, stage.Status, p)
+		}
 		// 检查是否停止
 		p.mu.Lock()
 		if p.Status == "terminal" {
+			if callback != nil {
+				callback(stage.Name, stage.Status, p)
+			}
 			p.mu.Unlock()
 			p.SaveState()
 			return nil, errors.New("pipeline stopped")
 		}
 		p.mu.Unlock()
 		out, err := stage.Run(ctx, input)
-		//time.Sleep(800 * time.Millisecond)
 		if err != nil {
 			return nil, err
 		}
@@ -90,7 +102,12 @@ func (p *Pipeline) Run(ctx context.Context, initialInput any) (any, error) {
 			p.Results = make(map[string]any)
 		}
 		p.Results[stage.Name] = out
+		stage.Status = StageCompleted
+		if callback != nil {
+			callback(stage.Name, stage.Status, p)
+		}
 	}
+	//THINK THIS 当Stage完成后，将currentUnitIndex重置，currentStageIndex+1
 	return input, nil
 }
 
@@ -101,6 +118,9 @@ func NewPipeline(StateStore ExecutionState, stages ...*Stage) *Pipeline {
 
 // SaveState 在合适时机调用saveState
 func (p *Pipeline) SaveState() {
+	if p.StateStore == nil {
+		return
+	}
 	state := PipelineState{
 		CurrentStageIndex: p.currentStageIndex,
 		CurrentUnitIndex:  p.currentUnitIndex,
@@ -116,6 +136,9 @@ func (p *Pipeline) SaveState() {
 
 // LoadState 在Resume或启动时从store加载状态
 func (p *Pipeline) LoadState() error {
+	if p.StateStore == nil {
+		return nil
+	}
 	state, err := p.StateStore.Load()
 	if err != nil {
 		return err
