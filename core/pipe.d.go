@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/ninenhan/go-workflow/fn"
 	"log"
 	"sync"
@@ -23,7 +24,7 @@ type ExecutionState interface {
 	Load() (PipelineState, error)
 }
 
-type StageCallback func(stageName string, status StageStatus, self *Pipeline) bool
+type StageCallback func(stage *Stage, status StageStatus, self *Pipeline, err error) bool
 
 // Pipeline 是整个 CI/CD 流水线，包含多个阶段
 type Pipeline struct {
@@ -47,19 +48,30 @@ func (p *Pipeline) Run(ctx context.Context, initialInput any) (any, error) {
 
 func (p *Pipeline) RunWithCallback(ctx context.Context, initialInput any, callback StageCallback) (any, error) {
 	input := initialInput
-	for i := p.currentStageIndex; i < len(p.stages); i++ {
-		//for _, stage := range p.stages {
+	var globalErr error
+	var runningStage *Stage
+	total := len(p.stages)
+	for i := p.currentStageIndex; i < total; i++ {
 		stage := p.stages[i]
+		runningStage = stage
 		if fn.IsEmpty(stage.Name) {
 			log.Printf("阶段 %d 名称未设置，跳过执行", i)
+			globalErr = errors.New(fmt.Sprintf("阶段 %d 名称未设置，跳过执行", i))
 			break
+		}
+		if stage.Status == "" {
+			stage.Status = StageRunning
 		}
 		// 在执行Stage内的Units时，也可能需要参考currentUnitIndex
 		// 并在每个Unit执行完后更新currentUnitIndex
 		// 当Stage完成后，将currentUnitIndex重置，currentStageIndex+1
 		// 检查是否暂停
 		if callback != nil {
-			callback(stage.Name, stage.Status, p)
+			exit := callback(runningStage, stage.Status, p, nil)
+			if exit {
+				globalErr = errors.New("user Stopped")
+				break
+			}
 		}
 		for {
 			p.mu.Lock()
@@ -79,23 +91,26 @@ func (p *Pipeline) RunWithCallback(ctx context.Context, initialInput any, callba
 			p.mu.Unlock()
 			break
 		}
-		if callback != nil {
-			callback(stage.Name, stage.Status, p)
-		}
 		// 检查是否停止
 		p.mu.Lock()
 		if p.Status == "terminal" {
 			if callback != nil {
-				callback(stage.Name, stage.Status, p)
+				globalErr = errors.New("user Stopped")
+				exit := callback(runningStage, stage.Status, p, globalErr)
+				if exit {
+					break
+				}
 			}
 			p.mu.Unlock()
 			p.SaveState()
-			return nil, errors.New("pipeline stopped")
+			globalErr = errors.New("user Terminal")
+			break
 		}
 		p.mu.Unlock()
 		out, err := stage.Run(ctx, input)
 		if err != nil {
-			return nil, err
+			globalErr = err
+			break
 		}
 		input = out
 		if p.Results == nil {
@@ -103,9 +118,13 @@ func (p *Pipeline) RunWithCallback(ctx context.Context, initialInput any, callba
 		}
 		p.Results[stage.Name] = out
 		stage.Status = StageCompleted
+		globalErr = nil
 		if callback != nil {
-			callback(stage.Name, stage.Status, p)
+			_ = callback(runningStage, stage.Status, p, nil)
 		}
+	}
+	if callback != nil {
+		_ = callback(runningStage, ALLStageCompleted, p, globalErr)
 	}
 	//THINK THIS 当Stage完成后，将currentUnitIndex重置，currentStageIndex+1
 	return input, nil

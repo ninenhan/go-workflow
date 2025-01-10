@@ -17,4 +17,6 @@ const (
 	StageCompleted     StageStatus = "COMPLETED"
 	StageFailed        StageStatus = "FAILED"
 	StageNeedTerminate StageStatus = "BREAK"
+
+	ALLStageCompleted StageStatus = "ALL:COMPLETED"
 )
