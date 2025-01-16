@@ -110,6 +110,9 @@ func (p *Pipeline) RunWithCallback(ctx context.Context, initialInput any, callba
 		out, err := stage.Run(ctx, input)
 		if err != nil {
 			globalErr = err
+			if callback != nil {
+				_ = callback(runningStage, stage.Status, p, globalErr)
+			}
 			break
 		}
 		input = out
