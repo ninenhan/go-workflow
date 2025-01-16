@@ -98,6 +98,7 @@ func (p *Pipeline) RunWithCallback(ctx context.Context, initialInput any, callba
 				globalErr = errors.New("user Stopped")
 				exit := callback(runningStage, stage.Status, p, globalErr)
 				if exit {
+					stage.Status = StageNeedTerminate
 					break
 				}
 			}
@@ -110,6 +111,7 @@ func (p *Pipeline) RunWithCallback(ctx context.Context, initialInput any, callba
 		out, err := stage.Run(ctx, input)
 		if err != nil {
 			globalErr = err
+			stage.Status = StageFailed
 			if callback != nil {
 				_ = callback(runningStage, stage.Status, p, globalErr)
 			}
