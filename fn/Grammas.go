@@ -15,6 +15,13 @@ func Ternary[T any](cond bool, trueVal T, falseVal T) T {
 	return falseVal
 }
 
+func TernaryFunc[T any](cond bool, trueVal func() T, falseVal T) T {
+	if cond {
+		return trueVal()
+	}
+	return falseVal
+}
+
 // ConvertByJSON Convert 转换任意类型 A 到类型 B
 func ConvertByJSON[A any, B any](input A) (B, error) {
 	// 序列化 input 为 JSON

@@ -2,14 +2,20 @@ package store
 
 import (
 	"errors"
-	"github.com/ninenhan/go-workflow/core"
 )
 
 // -----------------------------
 // Store
 // -----------------------------
 
-type PipelineState = core.PipelineState
+type PipelineState struct {
+	CurrentStageIndex int
+	// 如果Stage内部有多个Unit并行或串行执行的上下文，也需要记录当前Unit的进度
+	CurrentUnitIndex int
+	Status           string
+	// 可以存储上一阶段的输出数据，用于从中间点恢复
+	LastOutput any
+}
 
 type InMemoryState struct {
 	data PipelineState
