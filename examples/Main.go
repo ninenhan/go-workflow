@@ -1,6 +1,9 @@
 package main
 
+import "github.com/ninenhan/go-workflow/fn"
+
 func main() {
-	//fn.ParseTemplate_Test()
-	//FlowUnits()
+	fn.ParseTemplateTest()
+	//FlowUnitsTests()
+	//AccessNetWorkTests()
 }

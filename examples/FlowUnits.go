@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/ninenhan/go-workflow/flow"
+	"github.com/ninenhan/go-workflow/fn"
 	"github.com/ninenhan/go-workflow/units"
 )
 
-func FlowUnits() {
+func FlowUnitsTests() {
 	var unitList []flow.PhaseUnit
 	{
 		printUnit := units.NewLogUnit()
@@ -55,6 +56,12 @@ func FlowUnits() {
 			//InputKey: "input123",
 			Input: flow.Input{Data: "UUU! {{ew5pEmfk.output}}", DataType: "", Slottable: true},
 		}
+		unitList = append(unitList, &printUnit)
+	}
+
+	{
+		printUnit := units.NewTerminalUnit()
+		printUnit.ID = "901930"
 		unitList = append(unitList, &printUnit)
 	}
 
@@ -107,4 +114,42 @@ func FlowUnits() {
 		fmt.Printf("序列化后的 pipeline 单元:\n%s\n", string(res))
 	}
 
+}
+
+func AccessNetWorkTests() {
+
+	var unitList []flow.PhaseUnit
+	{
+		printUnit := units.NewLogUnit()
+		printUnit.ID = "Yw5pIVw9"
+		printUnit.IOConfig = &flow.IOConfig{
+			DefaultInput: flow.Input{Data: "你好，这是一个LogUnit", DataType: "", Slottable: false},
+		}
+		unitList = append(unitList, &printUnit)
+	}
+	{
+		requestData := map[string]any{"url": "http://localhost:11434/api/embed", "method": "POST",
+			"headers": map[string][]string{"Content-Type": {"application/json"}}, "body": map[string]string{"model": "nomic-embed-text", "input": "{{Yw5pIVw9.output}}"}}
+		unit := units.NewHttpUnit()
+		unit.ID = "Kji2fEac0"
+		unit.IOConfig = &flow.IOConfig{
+			Input: flow.Input{Data: fn.Stringify(requestData), DataType: "", Slottable: true},
+		}
+		unitList = append(unitList, &unit)
+	}
+
+	// 构造 pipeline（Storyboard 可理解为对各单元的配置与连线）
+	pipeline := flow.NewPipeline(unitList)
+	//
+	// 运行 pipeline
+	if err := pipeline.Run(); err != nil {
+		fmt.Printf("Pipeline 执行错误: %v\n", err)
+	}
+	// 序列化 pipeline 单元（用于保存配置或故事板）
+	res, err := json.MarshalIndent(pipeline.Units, "", "  ")
+	if err != nil {
+		fmt.Printf("序列化错误: %v\n", err)
+	} else {
+		fmt.Printf("序列化后的 pipeline 单元:\n%s\n", string(res))
+	}
 }

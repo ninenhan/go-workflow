@@ -5,15 +5,15 @@ import (
 	"reflect"
 )
 
-type LogUnit struct {
+type RemarkUnit struct {
 	flow.BaseUnit
 }
 
-func (t *LogUnit) GetUnitName() string {
-	return reflect.TypeOf(LogUnit{}).Name()
+func (t *RemarkUnit) GetUnitName() string {
+	return reflect.TypeOf(RemarkUnit{}).Name()
 }
 
-func (t *LogUnit) Execute(ctx *flow.PipelineContext, i *flow.Input) (*flow.Output, error) {
+func (t *RemarkUnit) Execute(ctx *flow.PipelineContext, i *flow.Input) (*flow.Output, error) {
 	if t.IOConfig == nil {
 		t.IOConfig = &flow.IOConfig{}
 	}
@@ -24,14 +24,14 @@ func (t *LogUnit) Execute(ctx *flow.PipelineContext, i *flow.Input) (*flow.Outpu
 	return o, nil
 }
 
-func NewLogUnit() LogUnit {
-	unit := LogUnit{}
+func NewRemarkUnit() RemarkUnit {
+	unit := RemarkUnit{}
 	unit.UnitName = unit.GetUnitName()
 	return unit
 }
 
 func init() {
-	unit := &LogUnit{}
+	unit := &RemarkUnit{}
 	// 自动注册 HttpUnit，注意这里注册的是非指针类型
 	flow.RegisterUnit(unit.GetUnitName(), unit)
 }

@@ -9,8 +9,12 @@ import (
 )
 
 const (
-	symbolPrefix = "{{"
-	symbolSuffix = "}}"
+	//symbolRawPrefix  = "{%"
+	//symbolRawSuffix  = "%}"
+	symbolAnnoPrefix = "{#"
+	symbolAnnoSuffix = "#}"
+	symbolPrefix     = "{{"
+	symbolSuffix     = "}}"
 )
 
 type TemplateNeedle struct {
@@ -113,6 +117,12 @@ func GetValue(data map[string]any, expr string) any {
 
 // RenderTemplateStrictly 根据传入的模型，将模板中的占位符替换为实际值
 func RenderTemplateStrictly(templateText string, slots map[string]TemplateNeedle, model map[string]any, strict bool) string {
+	//替换掉 {# --- #}
+	// 提前编译正则表达式，并使用非贪婪匹配
+	var annoRegex = regexp.MustCompile(
+		regexp.QuoteMeta(symbolAnnoPrefix) + `.*?` + regexp.QuoteMeta(symbolAnnoSuffix),
+	)
+	templateText = annoRegex.ReplaceAllString(templateText, "")
 	// 简单实现：遍历每个 key，将对应占位符替换
 	result := templateText
 	for key, val := range slots {
@@ -122,19 +132,25 @@ func RenderTemplateStrictly(templateText string, slots map[string]TemplateNeedle
 			value = GetValue(model, key)
 		}
 		placeholder := val.Template
+		placeholder = strings.ReplaceAll(placeholder, symbolPrefix, fmt.Sprintf("%s\\s*", symbolPrefix))
+		placeholder = strings.ReplaceAll(placeholder, symbolSuffix, fmt.Sprintf("\\s*%s", symbolSuffix))
 		str := fmt.Sprint(value)
 		fin := Ternary(IsDataEmpty(value), val.DefaultValue, str)
 		if !IsDataEmpty(fin) {
-			result = strings.ReplaceAll(result, placeholder, fin)
+			result = RegexReplace(result, placeholder, fin)
 		} else if strict {
-			result = strings.ReplaceAll(result, placeholder, "")
+			result = RegexReplace(result, placeholder, "")
 		}
 	}
 	return result
 }
-func ParseTemplate_Test() {
+func ParseTemplateTest() {
 	// 示例模板文本
-	inputText := "这是一段文章《{{文章名称}}》，请你帮我提炼出{{主旨名称:描述的社会背景}}，并且告诉我{{人物}}的相关信息。"
+	inputText := `
+	{# 文章名称:描述的社会背景1 #} XXX {# 文章名称:描述的社会背景3 #}
+这是一段文章《{{文章名称 }}》，请你帮我提炼出{{主旨名称:描述的社会背景}}，并且告诉我{{人物}}的相关信息。
+{# 文章名称:描述的社会背景2 #}
+`
 	// 解析模板中的占位符
 	parsed, err := ParseTemplate(inputText)
 	if err != nil {

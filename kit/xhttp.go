@@ -21,8 +21,76 @@ type XRequest struct {
 	Body    any                 `json:"body"`
 }
 
-// HandlerWithChannel CallChatGPT 调用 OpenAI 的 ChatGPT 接口
-func HandlerWithChannel(xRequest XRequest, ch chan<- any) error {
+// HandleStreamResponseUnTyped 处理流式响应
+func HandleStreamResponseUnTyped(ctx context.Context, resp *http.Response, isOpenAI bool, ch chan<- any) error {
+	defer func() {
+		close(ch) // 确保只有在流数据处理完后才关闭 Channel
+	}()
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// 检查流结束符
+		// 检查是否是流结束标志
+		if line == "[DONE]" || line == "data: [DONE]" {
+			break
+		}
+		// 处理以 "data:" 开头的内容
+		if len(line) > 6 && line[:6] == "data: " {
+			line = line[6:] // 去掉 "data: " 前缀
+			var data any
+			if isOpenAI {
+				var streamResp ChatGPTStreamResponse
+				if err := json.Unmarshal([]byte(line), &streamResp); err != nil {
+					return fmt.Errorf("解析流数据失败: %w", err)
+				}
+				data = streamResp
+			} else {
+				data = line
+			}
+			select {
+			case ch <- data: // 将内容发送到 Channel
+			case <-ctx.Done(): // 如果 context 被取消，则退出
+				return ctx.Err()
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("读取流数据失败: %w", err)
+	}
+	return nil
+}
+
+// HandleNonStreamResponseUnTyped 处理非流式响应
+func HandleNonStreamResponseUnTyped(ctx context.Context, resp *http.Response, isOpenAI bool, ch chan<- any) error {
+	defer func() {
+		close(ch) // 确保只有在流数据处理完后才关闭 Channel
+	}()
+	var data any
+	if isOpenAI {
+		var response ChatGPTResponse
+		err := json.NewDecoder(resp.Body).Decode(&response)
+		if err != nil {
+			return fmt.Errorf("解析非流式响应失败: %v", err)
+		}
+		data = response
+	} else {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		data = body
+	}
+	//// 获取所有的内容
+	select {
+	case ch <- data: // 将内容发送到 Channel
+	case <-ctx.Done(): // 如果 context 被取消，则退出
+		return ctx.Err()
+	}
+	return nil
+}
+
+// HandlerHttpWithChannel HTTP 请求处理函数
+func HandlerHttpWithChannel(xRequest XRequest, isPreCooked bool, ch chan<- any) error {
 	// 序列化请求体
 	body, err := json.Marshal(xRequest.Body)
 	if err != nil {
@@ -65,62 +133,9 @@ func HandlerWithChannel(xRequest XRequest, ch chan<- any) error {
 	// 处理 Stream 和非 Stream 两种模式
 	if strings.HasPrefix(contentType, "text/event-stream") {
 		// Stream 模式：逐行读取数据流
-		return handleStreamResponse(ctx, resp, ch)
+		return HandleStreamResponseUnTyped(ctx, resp, isPreCooked, ch)
 	} else {
 		// 非 Stream 模式：直接解析完整的 JSON 响应
-		return handleNonStreamResponse(ctx, resp, ch)
+		return HandleNonStreamResponseUnTyped(ctx, resp, isPreCooked, ch)
 	}
-}
-
-// handleStreamResponse 处理流式响应
-func handleStreamResponse(ctx context.Context, resp *http.Response, ch chan<- any) error {
-	defer func() {
-		close(ch) // 确保只有在流数据处理完后才关闭 Channel
-	}()
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		// 检查流结束符
-		// 检查是否是流结束标志
-		if line == "[DONE]" || line == "data: [DONE]" {
-			break
-		}
-		// 处理以 "data:" 开头的内容
-		if len(line) > 6 && line[:6] == "data: " {
-			line = line[6:] // 去掉 "data: " 前缀
-			var streamResp ChatGPTStreamResponse
-			if err := json.Unmarshal([]byte(line), &streamResp); err != nil {
-				return fmt.Errorf("解析流数据失败: %w", err)
-			}
-			select {
-			case ch <- streamResp: // 将内容发送到 Channel
-			case <-ctx.Done(): // 如果 context 被取消，则退出
-				return ctx.Err()
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("读取流数据失败: %w", err)
-	}
-	return nil
-}
-
-// 处理非流式响应
-func handleNonStreamResponse(ctx context.Context, resp *http.Response, ch chan<- any) error {
-	defer func() {
-		close(ch) // 确保只有在流数据处理完后才关闭 Channel
-	}()
-	var response ChatGPTResponse
-	err := json.NewDecoder(resp.Body).Decode(&response)
-	if err != nil {
-		return fmt.Errorf("解析非流式响应失败: %v", err)
-	}
-	//// 获取所有的内容
-	select {
-	case ch <- response: // 将内容发送到 Channel
-	case <-ctx.Done(): // 如果 context 被取消，则退出
-		return ctx.Err()
-	}
-	return nil
 }

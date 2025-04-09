@@ -13,8 +13,12 @@ import (
 
 // PipelineContext 用于保存执行过程中的环境变量
 type PipelineContext struct {
-	Env     map[string]interface{} `json:"env,omitempty"`
+	Env     map[string]any `json:"env,omitempty"`
 	Context context.Context
+}
+
+func (c PipelineContext) SetEnv(k string, v any) {
+	c.Env[k] = v
 }
 
 type Input struct {
@@ -217,7 +221,6 @@ func GetInput(unit PhaseUnit, env map[string]any) (*Input, error) {
 	//		}
 	//	}
 	//}
-
 	// 获取输入
 	if ioCfg != nil {
 		// 示例模板文本
@@ -246,7 +249,7 @@ func GetInput(unit PhaseUnit, env map[string]any) (*Input, error) {
 					fmt.Println("模型参数合法")
 				}
 				rendered := fn.RenderTemplateStrictly(str, parsed, renderModel, false)
-				fmt.Println("渲染后的模板：", rendered)
+				slog.Info("渲染后的模板：", rendered)
 				//p.Context.Env[
 				input = &Input{
 					Data:      rendered,
@@ -267,38 +270,6 @@ func GetInput(unit PhaseUnit, env map[string]any) (*Input, error) {
 	return input, nil
 }
 
-func (p *Pipeline) Run1() error {
-	env := p.Context.Env
-	defer func() {
-		fmt.Printf("Pipeline 执行结束。最后结果：%v\n", p.LastOutput)
-	}()
-	for _, unit := range p.Units {
-		if p.Interrupted {
-			fmt.Printf("Pipeline 被中断，停止执行。\n")
-			break
-		}
-
-		input, err := GetInput(unit, env)
-		if err != nil {
-			return err
-		}
-
-		res, err := unit.Execute(p.Context, input)
-		if err != nil {
-			return err
-		}
-
-		// 存储输出
-		if unit.GetID() != "" {
-			p.Context.Env[unit.GetID()] = map[string]any{
-				"output": res.Data,
-			}
-		}
-		p.LastOutput = *res
-	}
-	return nil
-}
-
 func (p *Pipeline) Run() error {
 	env := p.Context.Env
 	queue := append([]PhaseUnit{}, p.Units...)
@@ -316,12 +287,11 @@ func (p *Pipeline) Run() error {
 		if err != nil {
 			return err
 		}
-		slog.Info("执行单元：", "单元id", unit.GetID(), "单元名称", unit.GetUnitName())
+		slog.Info("执行单元：", "单元id", unit.GetID(), "单元名称", unit.GetUnitName(), "input", input)
 		res, err := unit.Execute(p.Context, input)
 		if err != nil {
 			return err
 		}
-
 		// 写入输出
 		if unit.GetID() != "" && res != nil {
 			env[unit.GetID()] = map[string]any{"output": res.Data}

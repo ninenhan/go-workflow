@@ -14,17 +14,18 @@ type HttpUnit struct {
 }
 
 func (t *HttpUnit) GetUnitName() string {
-	return reflect.TypeOf(LogUnit{}).Name()
+	return reflect.TypeOf(HttpUnit{}).Name()
 }
 
 func (t *HttpUnit) Execute(ctx *flow.PipelineContext, input *flow.Input) (*flow.Output, error) {
 	request, e := fn.ConvertByJSON[any, xhttp.XRequest](input.Data)
 	if e != nil {
+		slog.Error("转换失败", "err", e)
 		return nil, errors.New("invalid input type")
 	}
 	ch := make(chan any)
 	go func() {
-		err := xhttp.HandlerWithChannel(request, ch)
+		err := xhttp.HandlerHttpWithChannel(request, false, ch)
 		if err != nil {
 			slog.Error("调用失败", "err", err)
 		}
@@ -32,11 +33,16 @@ func (t *HttpUnit) Execute(ctx *flow.PipelineContext, input *flow.Input) (*flow.
 	var result []any
 	for message := range ch {
 		//TODO 如果是sse，可以通过event push出去
-		result = append(result, message)
+		if data, ok := message.([]byte); ok {
+			result = append(result, string(data))
+		} else {
+			result = append(result, message)
+		}
 	}
 	o := &flow.Output{
 		Data: result,
 	}
+	t.IOConfig.Output = *o
 	return o, nil
 }
 

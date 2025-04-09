@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 )
 
@@ -22,17 +23,40 @@ func TernaryFunc[T any](cond bool, trueVal func() T, falseVal T) T {
 	return falseVal
 }
 
+func Stringify[A any](input A) string {
+	// 检查是否为 nil
+	if any(input) == nil {
+		return ""
+	}
+	// 检查是否为字符串
+	if str, ok := any(input).(string); ok {
+		return str
+	}
+	data, err := json.Marshal(input)
+	if err == nil {
+		return string(data)
+	}
+	return fmt.Sprintf("%v", input)
+}
+
 // ConvertByJSON Convert 转换任意类型 A 到类型 B
 func ConvertByJSON[A any, B any](input A) (B, error) {
-	// 序列化 input 为 JSON
-	data, err := json.Marshal(input)
-	if err != nil {
-		var zero B // 返回 B 类型的零值
-		return zero, fmt.Errorf("序列化失败: %w", err)
+	var bytes = make([]byte, 0)
+	// 检查是否为字符串
+	if str, ok := any(input).(string); ok {
+		bytes = []byte(str)
+	} else {
+		// 序列化 input 为 JSON
+		data, err := json.Marshal(input)
+		if err != nil {
+			var zero B // 返回 B 类型的零值
+			return zero, fmt.Errorf("序列化失败: %w", err)
+		}
+		bytes = data
 	}
 	// 反序列化为目标类型
 	var result B
-	err = json.Unmarshal(data, &result)
+	err := json.Unmarshal(bytes, &result)
 	if err != nil {
 		return result, fmt.Errorf("反序列化失败: %w", err)
 	}
@@ -76,4 +100,13 @@ func Filter[T any](endpoints []T, f func(endpoint T) bool) []T {
 		}
 	}
 	return result
+}
+
+// RegexReplace 用正则表达式将字符串 s 中所有匹配 pattern 的部分替换为 repl
+func RegexReplace(s, pattern, repl string) string {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return s
+	}
+	return re.ReplaceAllString(s, repl)
 }
