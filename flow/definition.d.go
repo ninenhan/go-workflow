@@ -11,10 +11,18 @@ import (
 	"sync"
 )
 
+type PipeStatus struct {
+	Total  int32     `json:"total,omitempty"`
+	Step   string    `json:"step,omitempty"`
+	Status JobStatus `json:"status,omitempty"` // 运行状态
+}
+
 // PipelineContext 用于保存执行过程中的环境变量
 type PipelineContext struct {
-	Env     map[string]any `json:"env,omitempty"`
-	Context context.Context
+	Env        map[string]any                                `json:"env,omitempty"`
+	PipeStatus PipeStatus                                    `json:"pipe_status,omitempty"`
+	Handler    func(ctx *PipelineContext, status PipeStatus) `json:"_"`
+	Context    context.Context
 }
 
 func (c PipelineContext) SetEnv(k string, v any) {
