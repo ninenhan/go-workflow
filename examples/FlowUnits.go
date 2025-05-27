@@ -15,7 +15,7 @@ func FlowUnitsTests() {
 		printUnit.ID = "Yw5pIVw9"
 		printUnit.IOConfig = &flow.IOConfig{
 			//InputKey: "input123",
-			DefaultInput: flow.Input{Data: "你好，这是一个LogUnit", DataType: "", Slottable: false},
+			DefaultInput: flow.Input{Data: "你好，这是一个Unit", DataType: "", Slottable: false},
 		}
 		unitList = append(unitList, &printUnit)
 	}
@@ -117,7 +117,6 @@ func FlowUnitsTests() {
 }
 
 func AccessNetWorkTests() {
-
 	var unitList []flow.PhaseUnit
 	{
 		printUnit := units.NewLogUnit()
