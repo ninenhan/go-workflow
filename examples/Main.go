@@ -2,6 +2,7 @@ package main
 
 func main() {
 	//fn.ParseTemplateTest()
-	FlowUnitsTests()
+	//FlowUnitsTests()
 	//AccessNetWorkTests()
+	DagGraphTests()
 }

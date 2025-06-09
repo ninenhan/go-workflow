@@ -1,8 +1,9 @@
 package units
 
 import (
+	"context"
 	"errors"
-	"github.com/ninenhan/go-workflow/flow"
+	core "github.com/ninenhan/go-workflow"
 	"github.com/ninenhan/go-workflow/fn"
 	xhttp "github.com/ninenhan/go-workflow/kit"
 	"log/slog"
@@ -10,14 +11,15 @@ import (
 )
 
 type HttpUnit struct {
-	flow.BaseUnit
+	core.Unit
 }
 
 func (t *HttpUnit) GetUnitName() string {
 	return reflect.TypeOf(HttpUnit{}).Name()
 }
 
-func (t *HttpUnit) Execute(ctx *flow.PipelineContext, input *flow.Input) (*flow.Output, error) {
+func (t *HttpUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
+	input := self.Input
 	request, e := fn.ConvertByJSON[any, xhttp.XRequest](input.Data)
 	if e != nil {
 		slog.Error("转换失败", "err", e)
@@ -39,11 +41,12 @@ func (t *HttpUnit) Execute(ctx *flow.PipelineContext, input *flow.Input) (*flow.
 			result = append(result, message)
 		}
 	}
-	o := &flow.Output{
-		Data: result,
-	}
-	t.IOConfig.Output = *o
-	return o, nil
+	return &core.ExecutionResult{
+		NodeName: t.UnitName,
+		Data:     result,
+		Stream:   false,
+		Raw:      result,
+	}, nil
 }
 
 func NewHttpUnit() HttpUnit {
@@ -55,5 +58,5 @@ func NewHttpUnit() HttpUnit {
 func init() {
 	unit := &HttpUnit{}
 	// 自动注册 HttpUnit，注意这里注册的是非指针类型
-	flow.RegisterUnit(unit.GetUnitName(), unit)
+	core.RegisterUnit(unit.GetUnitName(), unit)
 }
