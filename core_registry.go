@@ -12,6 +12,7 @@ type UnitRepository struct {
 	Mappings map[string]reflect.Type // 存储所有单元的映射关系
 }
 
+// region //  deprecated: 使用 RegisterUnit 和 FindUnit 方法
 func (r *UnitRepository) RegisterUnit(name string, unit any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -19,6 +20,24 @@ func (r *UnitRepository) RegisterUnit(name string, unit any) {
 		r.Mappings = make(map[string]reflect.Type)
 	}
 	r.Mappings[name] = reflect.TypeOf(unit).Elem()
+}
+
+func (r *UnitRepository) FindUnit(name string) (*Unit, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.Mappings == nil {
+		return nil, fmt.Errorf("unit repository is not initialized")
+	}
+	unitType, ok := r.Mappings[name]
+	if !ok || unitType == nil {
+		return nil, fmt.Errorf("unit %s not found", name)
+	}
+	unitPtr := reflect.New(unitType).Interface()
+	u, ok := unitPtr.(Unit)
+	if !ok {
+		return nil, fmt.Errorf("unit %s is not a valid Unit type", name)
+	}
+	return &u, nil
 }
 
 func (r *UnitRepository) ParsePhaseUnitsFromMap(rawList []map[string]any) ([]Unit, error) {
@@ -61,30 +80,29 @@ func (r *UnitRepository) ParsePhaseUnits(jsonData []byte, typeField string) ([]U
 	return units, nil
 }
 
-var (
-	unitRepoOnce sync.Once
-	// Registry registry 保存了所有已注册的 unit 类型，key 为类型标识
-	unitRepo *UnitRepository
-)
-
 // 获取或初始化全局 unitRepo
-func getUnitRepo() *UnitRepository {
-	unitRepoOnce.Do(func() {
-		unitRepo = &UnitRepository{
-			Mappings: make(map[string]reflect.Type),
-		}
-	})
-	return unitRepo
+//func getUnitRepo() *UnitRepository {
+//	unitRepoOnce.Do(func() {
+//		unitRepo = &UnitRepository{
+//			Mappings: make(map[string]reflect.Type),
+//		}
+//	})
+//	return unitRepo
+//}
+
+// endregion
+var (
+	mu sync.RWMutex
+)
+var UnitRegistry = map[string]ExecutableUnit{}
+
+func RegisterUnit(name string, unit ExecutableUnit) {
+	UnitRegistry[name] = unit
 }
 
-func RegisterUnit(name string, unit any) {
-	getUnitRepo().RegisterUnit(name, unit)
-}
-
-func ParsePhaseUnits(jsonData []byte, typeField string) ([]Unit, error) {
-	return getUnitRepo().ParsePhaseUnits(jsonData, typeField)
-}
-
-func ParsePhaseUnitsFromMap(rawList []map[string]any) ([]Unit, error) {
-	return getUnitRepo().ParsePhaseUnitsFromMap(rawList)
+func FindUnit(name string) (ExecutableUnit, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	u, e := UnitRegistry[name]
+	return u, e
 }

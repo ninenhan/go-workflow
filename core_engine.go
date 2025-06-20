@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-type ContextMap = map[string]*ExecutionResult
+type ContextMap map[string]*ExecutionResult
 
 type Unit struct {
 	ID          string `json:"id"`
@@ -20,7 +20,7 @@ type Unit struct {
 
 type ExecutableUnit interface {
 	GetUnitMeta() *Unit
-	Execute(ctx context.Context, input *Input, state ContextMap) (*ExecutionResult, error)
+	Execute(ctx context.Context, state ContextMap, self *Node) (*ExecutionResult, error)
 }
 
 type Input struct {
@@ -34,6 +34,7 @@ type ExecutionResult struct {
 	Data     any    `json:"data,omitempty"`
 	Stream   bool   `json:"stream,omitempty"`
 	Raw      any    `json:"raw,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 func SimpleResult(data any) *ExecutionResult {
@@ -101,10 +102,12 @@ func (g *Graph) Run(ctx context.Context, start string, state ContextMap) error {
 
 		var result *ExecutionResult
 		var err error
-
 		for {
 			result, err = node.Execute(ctx, state, node)
 			if err != nil {
+				state[curr] = &ExecutionResult{
+					Error: err.Error(),
+				}
 				return fmt.Errorf("exec %s failed: %w", curr, err)
 			}
 

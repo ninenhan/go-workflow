@@ -14,6 +14,8 @@ type HttpUnit struct {
 	core.Unit
 }
 
+var _ core.ExecutableUnit = (*HttpUnit)(nil) // ✅ 编译期检查
+
 func (t *HttpUnit) GetUnitName() string {
 	return reflect.TypeOf(HttpUnit{}).Name()
 }
@@ -49,6 +51,10 @@ func (t *HttpUnit) Execute(ctx context.Context, state core.ContextMap, self *cor
 	}, nil
 }
 
+func (t *HttpUnit) GetUnitMeta() *core.Unit {
+	return &t.Unit
+}
+
 func NewHttpUnit() HttpUnit {
 	unit := HttpUnit{}
 	unit.UnitName = unit.GetUnitName()
@@ -56,7 +62,7 @@ func NewHttpUnit() HttpUnit {
 }
 
 func init() {
-	unit := &HttpUnit{}
-	// 自动注册 HttpUnit，注意这里注册的是非指针类型
-	core.RegisterUnit(unit.GetUnitName(), unit)
+	//unit := &HttpUnit{}
+	//// 自动注册 HttpUnit，注意这里注册的是非指针类型
+	//core.RegisterUnit(unit.GetUnitName(), unit)
 }
