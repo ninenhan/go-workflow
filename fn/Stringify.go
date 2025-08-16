@@ -5,8 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/bwmarrin/snowflake"
+	"github.com/google/uuid"
+	"gorm.io/datatypes"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -23,7 +29,7 @@ func InitSnowflake(nodeID int64) (*snowflake.Node, error) {
 	return node, nil
 }
 
-func GenerateShortID() (string, error) {
+func GenerateShortIDWithDigits(digits uint8) (string, error) {
 	node, err := InitSnowflake(1)
 	if err != nil {
 		return "", err
@@ -37,48 +43,63 @@ func GenerateShortID() (string, error) {
 	input := fmt.Sprintf("%s%x", rndStr, id)
 	hash := sha256.Sum256([]byte(input))
 	// 取 SHA-256 前 6 字节，转换为 Base64
-	shortID := base64.RawURLEncoding.EncodeToString(hash[:8]) // Base64（URL 安全版）
+	shortID := base64.RawURLEncoding.EncodeToString(hash[:digits]) // Base64（URL 安全版）
 	// 固定 8 位，并添加 `=` 作为 Padding
-	return fmt.Sprintf("%-8s", shortID)[:8], nil
+	result := fmt.Sprintf("%-8s", shortID)[:digits]
+	result = regexp.MustCompile(`\s+`).ReplaceAllString(result, "")
+	return result, nil
 }
 
-//func test() {
-//	var wg sync.WaitGroup
-//	var mu sync.Mutex
-//	seen := make(map[string]struct{})
-//
-//	// 并发数和测试总数
-//	concurrency := 2000         // 并发 goroutines 数
-//	totalRequests := 20_000_000 // 总共生成的 ID 数
-//
-//	// 开始并发测试
-//	startTime := time.Now()
-//	fmt.Println("开始并发生成 ID...")
-//	var duplicated []string
-//	for i := 0; i < concurrency; i++ {
-//		wg.Add(1)
-//		go func() {
-//			defer wg.Done()
-//			for j := 0; j < totalRequests/concurrency; j++ {
-//				id, _ := GenerateShortID()
-//
-//				// 检查是否重复
-//				mu.Lock()
-//				if _, exists := seen[id]; exists {
-//					fmt.Println("❌ 发现重复 ID:", id)
-//					duplicated = append(duplicated, id)
-//				}
-//				fmt.Println(" ID:", id)
-//				seen[id] = struct{}{}
-//				mu.Unlock()
-//			}
-//		}()
-//	}
-//
-//	wg.Wait()
-//	elapsedTime := time.Since(startTime)
-//
-//	fmt.Printf("✅ 生成 %d 个 ID，发现重复 %d\n", totalRequests, len(duplicated))
-//	fmt.Printf("⏳ 耗时: %v\n", elapsedTime)
-//
-//}
+func GenerateShortID() (string, error) {
+	return GenerateShortIDWithDigits(8)
+}
+
+func Uuid() string {
+	return strings.ReplaceAll(uuid.NewString(), "-", "")
+}
+
+func MustJSON(v any) datatypes.JSON {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+func UniqueStrings(input []string) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(input))
+	for _, v := range input {
+		if _, ok := seen[v]; !ok {
+			seen[v] = struct{}{}
+			result = append(result, v)
+		}
+	}
+	return result
+}
+
+func GetSuffix(str string) string {
+	return filepath.Ext(str)
+}
+
+func NumericStringify(v any) string {
+	switch val := v.(type) {
+	case float64:
+		return strconv.FormatFloat(val, 'f', -1, 64) // 'f' 表示非科学计数法
+	case *float64:
+		if val == nil {
+			return ""
+		}
+		return strconv.FormatFloat(*val, 'f', -1, 64)
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case *int64:
+		if val == nil {
+			return ""
+		}
+		return strconv.FormatInt(*val, 10)
+	case FlexibleFloat64:
+		return fmt.Sprintf("%v", strconv.FormatFloat(float64(val), 'f', -1, 64)) // "123.456" ✅ 精度不变
+	case FlexibleInt64, FlexibleInt8:
+		return fmt.Sprintf("%d", val)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}

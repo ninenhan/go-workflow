@@ -3,6 +3,7 @@ package fn
 import (
 	"errors"
 	"fmt"
+	"github.com/ninenhan/go-profile/utils"
 	"regexp"
 	"strconv"
 	"strings"
@@ -135,7 +136,7 @@ func RenderTemplateStrictly(templateText string, slots map[string]TemplateNeedle
 		placeholder = strings.ReplaceAll(placeholder, symbolPrefix, fmt.Sprintf("%s\\s*", symbolPrefix))
 		placeholder = strings.ReplaceAll(placeholder, symbolSuffix, fmt.Sprintf("\\s*%s", symbolSuffix))
 		str := fmt.Sprint(value)
-		fin := Ternary(IsDataEmpty(value), val.DefaultValue, str)
+		fin := utils.Ternary(IsDataEmpty(value), val.DefaultValue, str)
 		if !IsDataEmpty(fin) {
 			result = RegexReplace(result, placeholder, fin)
 		} else if strict {
@@ -144,6 +145,21 @@ func RenderTemplateStrictly(templateText string, slots map[string]TemplateNeedle
 	}
 	return result
 }
+
+func DefaultTemplateRender(inputText string, sourceMap map[string]any, result *string) error {
+	// 解析模板中的占位符
+	parsed, err := ParseTemplate(inputText)
+	if err != nil {
+		fmt.Println("解析模板出错：", err)
+		return errors.New("解析出错")
+	}
+	if err := CheckModelValid(sourceMap); err != nil {
+		fmt.Println("模型参数不合法：", err)
+	}
+	*result = RenderTemplateStrictly(inputText, parsed, sourceMap, true)
+	return nil
+}
+
 func ParseTemplateTest() {
 	// 示例模板文本
 	inputText := `

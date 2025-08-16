@@ -1,11 +1,14 @@
 package fn
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Ternary 三元表达式
@@ -109,4 +112,133 @@ func RegexReplace(s, pattern, repl string) string {
 		return s
 	}
 	return re.ReplaceAllString(s, repl)
+}
+
+func StreamMap[T any, R any](in []T, f func(T) R) []R {
+	out := make([]R, len(in))
+	for i, v := range in {
+		out[i] = f(v)
+	}
+	return out
+}
+
+func CollectToMap[T any, K comparable, V any](
+	in []T,
+	keyOf func(T) K,
+	valOf func(T) V,
+) map[K]V {
+	out := make(map[K]V, len(in))
+	for i := range in {
+		out[keyOf(in[i])] = valOf(in[i])
+	}
+	return out
+}
+
+func MapKeys[M ~map[K]V, K comparable, V any](m M) []string {
+	rawKeys := maps.Keys(m)
+	var allKeys []string
+	for k := range rawKeys {
+		allKeys = append(allKeys, fmt.Sprint(k))
+	}
+	return allKeys
+}
+
+func Find[T any](list []T, predicate func(T) bool) (T, bool) {
+	var zero T
+	for _, item := range list {
+		if predicate(item) {
+			return item, true
+		}
+	}
+	return zero, false
+}
+
+type Pair[O any] struct {
+	Out O
+	Err error
+}
+
+// RunParallel 并发执行 fn，按输入顺序返回结果。
+// - inputs: 要处理的输入切片
+// - workers: 工作者数量（<=0 视为 1）
+// - fn: 你的任务函数，形如 func(ctx, I) (O, error)
+func RunParallel[I any, O any](
+	ctx context.Context,
+	inputs []I,
+	workers int,
+	rowId func(I) string,
+	function func(context.Context, I) (O, error),
+) (map[string]O, []error) {
+	defer TimingMiddlewareLogging("👷 WORKER", "RunParallel")()
+
+	n := len(inputs)
+	if workers <= 0 {
+		workers = 1
+	}
+	if workers > n {
+		workers = n
+	}
+
+	out := make(map[string]O, n)
+	errs := make([]error, n)
+
+	type job struct {
+		idx int
+		key string
+	}
+	type res struct {
+		idx int
+		key string
+		val O
+		err error
+	}
+
+	jobs := make(chan job)
+	results := make(chan res, workers) // 小缓冲减少阻塞
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+
+	// workers
+	worker := func() {
+		defer wg.Done()
+		for j := range jobs {
+			select {
+			case <-ctx.Done():
+				var zero O
+				results <- res{idx: j.idx, key: j.key, val: zero, err: ctx.Err()}
+			default:
+				v, e := function(ctx, inputs[j.idx])
+				results <- res{idx: j.idx, key: j.key, val: v, err: e}
+			}
+		}
+	}
+	for i := 0; i < workers; i++ {
+		go worker()
+	}
+
+	// 派发
+	go func() {
+		defer close(jobs)
+		for i := 0; i < n; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- job{idx: i, key: rowId(inputs[i])}:
+			}
+		}
+	}()
+
+	// 收集（单写者：这里安全写 map 和切片）
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for r := range results {
+		out[r.key] = r.val  // 单 goroutine 写 map -> 安全
+		errs[r.idx] = r.err // 不重分配，按索引写切片本来也安全
+	}
+
+	return out, errs
 }
