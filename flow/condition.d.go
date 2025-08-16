@@ -10,20 +10,22 @@ import (
 
 // 预定义的 Operator 实例
 var (
-	LIKE      = Operator{"LIKE", "文本包含", String, false, 10}
-	IN_LIKE   = Operator{"IN_LIKE", "文本包含", StringList, false, 20}
-	IN        = Operator{"IN", "IN", StringList, false, 30}
-	NOT_IN    = Operator{"NOT_IN", "非IN", StringList, false, 30}
-	SAME      = Operator{"SAME", "完全匹配", String, false, 100}
-	EQ        = Operator{"EQ", "数值等于", Number, false, 150}
-	NE        = Operator{"NE", "数值不等于", Number, false, 200}
-	GT        = Operator{"GT", "数值大于", Number, false, 300}
-	GTE       = Operator{"GTE", "数值大于等于", Number, false, 400}
-	LT        = Operator{"LT", "数值小于", Number, false, 500}
-	LTE       = Operator{"LTE", "数值小于等于", Number, false, 600}
-	NOT_EMPTY = Operator{"NOT_EMPTY", "存在", Single, false, 0}
-	EMPTY     = Operator{"EMPTY", "不存在", Single, false, 1}
-	BETWEEN   = Operator{"BETWEEN", "数值介于", NumberTuple, false, 700}
+	LIKE       = Operator{"LIKE", "文本包含", String, false, 10}
+	IN_LIKE    = Operator{"IN_LIKE", "文本包含", StringList, false, 20}
+	IN         = Operator{"IN", "IN", StringList, false, 30}
+	NOT_IN     = Operator{"NOT_IN", "非IN", StringList, false, 30}
+	SAME       = Operator{"SAME", "完全匹配", String, false, 100}
+	EQ         = Operator{"EQ", "数值等于", Number, false, 150}
+	NE         = Operator{"NE", "数值不等于", Number, false, 200}
+	GT         = Operator{"GT", "数值大于", Number, false, 300}
+	GTE        = Operator{"GTE", "数值大于等于", Number, false, 400}
+	LT         = Operator{"LT", "数值小于", Number, false, 500}
+	LTE        = Operator{"LTE", "数值小于等于", Number, false, 600}
+	NOT_EMPTY  = Operator{"NOT_EMPTY", "存在", Single, false, 0}
+	EMPTY      = Operator{"EMPTY", "不存在", Single, false, 1}
+	BETWEEN    = Operator{"BETWEEN", "数值介于", NumberTuple, false, 700}
+	EXISTS     = Operator{"EXISTS", "存在", Single, false, 0}
+	NON_EXISTS = Operator{"NON_EXISTS", "不存在", Single, false, 1}
 )
 
 type Joiner = string // AND, OR
@@ -32,7 +34,7 @@ type Joiner = string // AND, OR
 type Condition struct {
 	Key       string      `json:"key,omitempty"`      // 条件键
 	Operator  string      `json:"operator,omitempty"` // 操作符
-	Value     string      `json:"value,omitempty"`    // 值
+	Value     any         `json:"value,omitempty"`    // 值
 	Label     string      `json:"label,omitempty"`    // 标签
 	Script    string      `json:"script,omitempty"`   // 脚本
 	JointNext Joiner      `json:"joint_next,omitempty"`
@@ -225,7 +227,10 @@ func ConditionValidator(ctx *PipelineContext, condition Condition) bool {
 	k, o, v := condition.Key, condition.Operator, condition.Value
 	parsed1, _ := fn.ParseTemplate(k)
 	k = fn.RenderTemplateStrictly(k, parsed1, renderModel, false)
-	parsed2, _ := fn.ParseTemplate(v)
-	v = fn.RenderTemplateStrictly(k, parsed2, renderModel, false)
-	return Eval(o, k, v)
+	if s, ok := v.(string); ok {
+		parsed2, _ := fn.ParseTemplate(s)
+		s = fn.RenderTemplateStrictly(k, parsed2, renderModel, false)
+		return Eval(o, k, s)
+	}
+	return false
 }
