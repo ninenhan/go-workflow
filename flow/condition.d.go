@@ -28,17 +28,23 @@ var (
 	NON_EXISTS = Operator{"NON_EXISTS", "不存在", Single, false, 1}
 )
 
-type Joiner = string // AND, OR
+type LogicConnector int
+
+const (
+	AND LogicConnector = iota
+	OR
+	NOT
+)
 
 // Condition 结构体
 type Condition struct {
-	Key       string      `json:"key,omitempty"`      // 条件键
-	Operator  string      `json:"operator,omitempty"` // 操作符
-	Value     any         `json:"value,omitempty"`    // 值
-	Label     string      `json:"label,omitempty"`    // 标签
-	Script    string      `json:"script,omitempty"`   // 脚本
-	JointNext Joiner      `json:"joint_next,omitempty"`
-	Children  []Condition `json:"children,omitempty"`
+	Key       string         `json:"key,omitempty"`      // 条件键
+	Operator  string         `json:"operator,omitempty"` // 操作符
+	Value     any            `json:"value,omitempty"`    // 值
+	Label     string         `json:"label,omitempty"`    // 标签
+	Script    string         `json:"script,omitempty"`   // 脚本
+	Connector LogicConnector `json:"connector,omitempty"`
+	Children  []Condition    `json:"children,omitempty"`
 }
 
 // IfUnit 实现 if–else 控制，根据条件选择执行 true 或 false 分支中的单元
