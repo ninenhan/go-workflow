@@ -412,6 +412,56 @@ func init() {
 		}
 	}
 
+	evalFunctions["number"] = func(args ...any) (any, error) {
+		if len(args) == 0 {
+			return float64(0), nil
+		}
+
+		switch v := args[0].(type) {
+
+		case nil:
+			return float64(0), nil
+
+		case int:
+			return float64(v), nil
+		case int8:
+			return float64(v), nil
+		case int16:
+			return float64(v), nil
+		case int32:
+			return float64(v), nil
+		case int64:
+			return float64(v), nil
+
+		case uint:
+			return float64(v), nil
+		case uint8:
+			return float64(v), nil
+		case uint16:
+			return float64(v), nil
+		case uint32:
+			return float64(v), nil
+		case uint64:
+			return float64(v), nil
+
+		case float32:
+			return float64(v), nil
+		case float64:
+			return v, nil
+
+		case string:
+			// 尝试解析字符串成数字
+			if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+				return f, nil
+			}
+			return float64(0), nil
+
+		default:
+			// 其他类型一律返回 0
+			return float64(0), nil
+		}
+	}
+
 	evalFunctions["empty"] = func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return true, nil
@@ -491,10 +541,10 @@ func ParseTemplateTest() {
 	// 检查模型参数是否合法（这里只是示例模型）
 	// 准备渲染模板的数据（只替换部分占位符）
 	renderModel := map[string]any{
-		"文章名称":  "汤姆叔叔的小屋",
-		"人物":    "主人公和发生地点",
-		"age":   18,
-		"title": "主人公和发生地点",
+		"文章名称": "汤姆叔叔的小屋",
+		"人物":     "主人公和发生地点",
+		"age":      18,
+		"title":    "主人公和发生地点",
 	}
 	if err := CheckModelValid(renderModel); err != nil {
 		fmt.Println("模型参数不合法：", err)
