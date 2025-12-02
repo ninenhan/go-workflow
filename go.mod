@@ -5,11 +5,13 @@ go 1.23.0
 toolchain go1.23.2
 
 require (
+	github.com/Knetic/govaluate v3.0.0+incompatible
 	github.com/bwmarrin/snowflake v0.3.0
 	github.com/dop251/goja v0.0.0-20250309171923-bcd7cc6bf64c
 	github.com/google/uuid v1.6.0
 	github.com/ninenhan/go-profile v1.0.6
 	golang.org/x/crypto v0.22.0
+	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa
 	gorm.io/datatypes v1.2.5
 	gorm.io/gorm v1.30.0
 )

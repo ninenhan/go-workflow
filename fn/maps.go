@@ -2,8 +2,20 @@ package fn
 
 import (
 	"fmt"
+	"golang.org/x/exp/maps"
 	"iter"
 )
+
+func Unique[T comparable](arr []T) []T {
+	if len(arr) < 2 {
+		return arr
+	}
+	m := make(map[T]struct{}, len(arr))
+	for _, v := range arr {
+		m[v] = struct{}{}
+	}
+	return maps.Keys(m) // Go 1.21+
+}
 
 func StreamMapDistinct[T any, R comparable](in []T, fn func(T) R) []R {
 	seen := make(map[R]struct{}, len(in))

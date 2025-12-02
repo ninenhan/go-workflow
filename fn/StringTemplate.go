@@ -3,10 +3,12 @@ package fn
 import (
 	"errors"
 	"fmt"
+	"github.com/Knetic/govaluate"
 	"github.com/ninenhan/go-profile/utils"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -16,7 +18,223 @@ const (
 	symbolAnnoSuffix = "#}"
 	symbolPrefix     = "{{"
 	symbolSuffix     = "}}"
+
+	tagStart  = "<%"
+	tagEnd    = "%>"
+	echoStart = "<%="
 )
+
+type Token struct {
+	Kind string // text | if | else | end
+	Val  string
+}
+
+func tokenize(input string) []Token {
+	var tokens []Token
+	for {
+		startEcho := strings.Index(input, echoStart)
+		startTag := strings.Index(input, tagStart)
+
+		// 选择最近出现的那一个
+		start := -1
+		isEcho := false
+
+		if startEcho >= 0 && (startTag < 0 || startEcho < startTag) {
+			start = startEcho
+			isEcho = true
+		} else {
+			start = startTag
+		}
+		if isEcho {
+			// echo 分支
+			end := strings.Index(input[start:], tagEnd)
+			cmd := input[start+3 : start+end] // 跳过 "<%="
+			tokens = append(tokens, Token{"echo", strings.TrimSpace(cmd)})
+			input = input[start+end+2:]
+			continue
+		}
+		if start < 0 {
+			if len(input) > 0 {
+				tokens = append(tokens, Token{Kind: "text", Val: input})
+			}
+			break
+		}
+		if start > 0 {
+			tokens = append(tokens, Token{Kind: "text", Val: input[:start]})
+		}
+		end := strings.Index(input[start:], tagEnd)
+		if end < 0 {
+			break
+		}
+		cmd := strings.TrimSpace(input[start+2 : start+end])
+		switch {
+		case strings.HasPrefix(cmd, "if "):
+			tokens = append(tokens, Token{Kind: "if", Val: strings.TrimSpace(cmd[3:])})
+
+		case strings.HasPrefix(cmd, "elseif "):
+			tokens = append(tokens, Token{Kind: "elseif", Val: strings.TrimSpace(cmd[7:])})
+
+		case cmd == "else":
+			tokens = append(tokens, Token{Kind: "else"})
+
+		case cmd == "end":
+			tokens = append(tokens, Token{Kind: "end"})
+		case strings.HasPrefix(cmd, "="):
+			tokens = append(tokens, Token{Kind: "echo", Val: strings.TrimSpace(cmd[1:])})
+		default:
+			// 也作为文本
+			tokens = append(tokens, Token{Kind: "text", Val: "<%" + cmd + "%>"})
+		}
+		input = input[start+end+2:]
+	}
+	return tokens
+}
+func parseNodes(tokens []Token, i int) ([]Node, int, error) {
+	var nodes []Node
+
+	for i < len(tokens) {
+		tk := tokens[i]
+
+		switch tk.Kind {
+
+		case "text":
+			nodes = append(nodes, TextNode{Text: tk.Val})
+			i++
+		case "echo":
+			nodes = append(nodes, EchoNode{Expr: tk.Val})
+			i++
+		case "if":
+			ifNode := &IfNode{
+				Conds:  []string{tk.Val},
+				Blocks: [][]Node{},
+			}
+
+			// 解析 if 第一段
+			block, ni, err := parseNodes(tokens, i+1)
+			if err != nil {
+				return nil, 0, err
+			}
+			ifNode.Blocks = append(ifNode.Blocks, block)
+			i = ni
+
+			// elseif 解析
+			for i < len(tokens) && tokens[i].Kind == "elseif" {
+				cond := tokens[i].Val
+				i++
+
+				bk, ni2, err := parseNodes(tokens, i)
+				if err != nil {
+					return nil, 0, err
+				}
+
+				ifNode.Conds = append(ifNode.Conds, cond)
+				ifNode.Blocks = append(ifNode.Blocks, bk)
+				i = ni2
+			}
+
+			// else 分支
+			if i < len(tokens) && tokens[i].Kind == "else" {
+				bk, ni3, err := parseNodes(tokens, i+1)
+				if err != nil {
+					return nil, 0, err
+				}
+				ifNode.Else = bk
+				i = ni3
+			}
+
+			// end
+			if i >= len(tokens) || tokens[i].Kind != "end" {
+				return nil, 0, errors.New("missing <% end %>")
+			}
+			i++ // consume end
+
+			nodes = append(nodes, ifNode)
+
+		case "else", "elseif", "end":
+			return nodes, i, nil
+		}
+	}
+	return nodes, i, nil
+}
+
+var evalFunctions map[string]govaluate.ExpressionFunction
+
+func evalExprValue(expr string, model map[string]any) any {
+	e, err := govaluate.NewEvaluableExpressionWithFunctions(expr, evalFunctions)
+	if err != nil {
+		return ""
+	}
+	res, err := e.Evaluate(model)
+	if err != nil {
+		return ""
+	}
+	return res
+}
+
+func evalExpr(expr string, model map[string]any) bool {
+	e, err := govaluate.NewEvaluableExpressionWithFunctions(expr, evalFunctions)
+	if err != nil {
+		return false
+	}
+	res, err := e.Evaluate(model)
+	if err != nil {
+		return false
+	}
+	b, ok := res.(bool)
+	return ok && b
+}
+
+func RenderControlNodes(nodes []Node, model map[string]any) string {
+	var sb strings.Builder
+	for _, n := range nodes {
+		switch v := n.(type) {
+		case TextNode:
+			sb.WriteString(v.Text)
+		case EchoNode:
+			val := evalExprValue(v.Expr, model)
+			sb.WriteString(fmt.Sprint(val))
+		case *IfNode:
+			matched := false
+			// if + elseif
+			for idx, cond := range v.Conds {
+				if evalExpr(cond, model) {
+					sb.WriteString(RenderControlNodes(v.Blocks[idx], model))
+					matched = true
+					break
+				}
+			}
+
+			// else
+			if !matched {
+				sb.WriteString(RenderControlNodes(v.Else, model))
+			}
+		}
+	}
+	return sb.String()
+}
+
+func ParseControlBlocks(input string) ([]Node, error) {
+	tokens := tokenize(input)
+	nodes, _, err := parseNodes(tokens, 0)
+	return nodes, err
+}
+
+// -------- 控制流 AST --------
+type Node interface{}
+
+type TextNode struct {
+	Text string
+}
+
+type EchoNode struct {
+	Expr string
+}
+
+type IfNode struct {
+	Conds  []string // if + elseif 共用
+	Blocks [][]Node // 每个条件对应一个 block
+	Else   []Node   // else 内容
+}
 
 type TemplateNeedle struct {
 	Template     string `json:"template"`
@@ -51,7 +269,8 @@ func ParseTemplate(templateText string) (map[string]TemplateNeedle, error) {
 // CheckModelValid 检查模型中每个键是否合法：非空且只允许英文、数字、下划线以及中文字符
 func CheckModelValid(model map[string]any) error {
 	// 正则：允许 a-z, A-Z, 0-9, 下划线, 以及中文字符（\p{Han}）
-	re := regexp.MustCompile(`^[a-zA-Z0-9_\\$\p{Han}]+$`)
+	//re := regexp.MustCompile(`^[a-zA-Z0-9_\\$\p{Han}]+$`)
+	re := regexp.MustCompile(`^[\p{Han}a-zA-Z0-9_]+$`)
 	for key := range model {
 		if strings.TrimSpace(key) == "" {
 			return errors.New("检测到模板参数，但缺少真实值")
@@ -160,9 +379,102 @@ func DefaultTemplateRender(inputText string, sourceMap map[string]any, result *s
 	return nil
 }
 
+func RenderTemplateWithControl(input string, model map[string]any) (string, error) {
+	// 解析控制块 AST
+	nodes, err := ParseControlBlocks(input)
+	if err != nil {
+		return "", err
+	}
+	// 执行控制流
+	step1 := RenderControlNodes(nodes, model)
+	// slot 渲染
+	var final string
+	err = DefaultTemplateRender(step1, model, &final)
+	return final, err
+}
+
+func init() {
+	evalFunctions = map[string]govaluate.ExpressionFunction{}
+
+	evalFunctions["len"] = func(args ...any) (any, error) {
+		if len(args) == 0 {
+			return float64(0), nil
+		}
+		switch v := args[0].(type) {
+		case string:
+			return float64(utf8.RuneCountInString(v)), nil
+		case []any:
+			return float64(len(v)), nil
+		case map[string]any:
+			return float64(len(v)), nil
+		default:
+			return float64(0), nil
+		}
+	}
+
+	evalFunctions["empty"] = func(args ...any) (any, error) {
+		if len(args) == 0 {
+			return true, nil
+		}
+		switch v := args[0].(type) {
+		case nil:
+			return true, nil
+		case string:
+			return strings.TrimSpace(v) == "", nil
+		case []any:
+			return len(v) == 0, nil
+		case map[string]any:
+			return len(v) == 0, nil
+		default:
+			return false, nil
+		}
+	}
+
+	evalFunctions["notempty"] = func(args ...any) (any, error) {
+		r, _ := evalFunctions["empty"](args...)
+		b, _ := r.(bool)
+		return !b, nil
+	}
+
+	evalFunctions["contains"] = func(args ...any) (any, error) {
+		if len(args) < 2 {
+			return false, nil
+		}
+		s, _ := args[0].(string)
+		sub, _ := args[1].(string)
+		return strings.Contains(s, sub), nil
+	}
+
+	evalFunctions["starts"] = func(args ...any) (any, error) {
+		if len(args) < 2 {
+			return false, nil
+		}
+		s, _ := args[0].(string)
+		p, _ := args[1].(string)
+		return strings.HasPrefix(s, p), nil
+	}
+
+	evalFunctions["ends"] = func(args ...any) (any, error) {
+		if len(args) < 2 {
+			return false, nil
+		}
+		s, _ := args[0].(string)
+		p, _ := args[1].(string)
+		return strings.HasSuffix(s, p), nil
+	}
+}
+
 func ParseTemplateTest() {
 	// 示例模板文本
 	inputText := `
+		<%= len(人物) %>
+		<% if contains(文章名称, "1汤姆叔叔") %>
+		你是成年人。
+		<% elseif len(title) == 8 %>
+		刚好 18  
+		<% else %>
+		你还未成年。
+		<% end %>
 	{# 文章名称:描述的社会背景1 #} XXX {# 文章名称:描述的社会背景3 #}
 这是一段文章《{{文章名称 }}》，请你帮我提炼出{{主旨名称:描述的社会背景}}，{# 文章名称:描述的社会背景2 #}
 并且告诉我{{人物}}的相关信息。
@@ -179,14 +491,17 @@ func ParseTemplateTest() {
 	// 检查模型参数是否合法（这里只是示例模型）
 	// 准备渲染模板的数据（只替换部分占位符）
 	renderModel := map[string]any{
-		"文章名称": "汤姆叔叔的小屋",
-		"人物":   "主人公和发生地点",
+		"文章名称":  "汤姆叔叔的小屋",
+		"人物":    "主人公和发生地点",
+		"age":   18,
+		"title": "主人公和发生地点",
 	}
 	if err := CheckModelValid(renderModel); err != nil {
 		fmt.Println("模型参数不合法：", err)
 	} else {
 		fmt.Println("模型参数合法")
 	}
-	rendered := RenderTemplateStrictly(inputText, parsed, renderModel, true)
+	rendered, _ := RenderTemplateWithControl(inputText, renderModel)
+	//rendered := RenderTemplateStrictly(inputText, parsed, renderModel, true)
 	fmt.Println("渲染后的模板：", rendered)
 }
