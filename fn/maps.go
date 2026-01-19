@@ -30,6 +30,21 @@ func StreamMapDistinct[T any, R comparable](in []T, fn func(T) R) []R {
 	return out
 }
 
+// StreamMapDistinctBy 按 keyFn 去重，返回原始元素，保持顺序
+func StreamMapDistinctBy[T any, K comparable](in []T, keyFn func(T) K) []T {
+	seen := make(map[K]struct{}, len(in))
+	out := make([]T, 0, len(in))
+	for _, v := range in {
+		k := keyFn(v)
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
 func MapNotNull[T any, R any](in []T, f func(T) *R) []R {
 	out := make([]R, 0, len(in))
 	for _, v := range in {
@@ -115,4 +130,16 @@ func ReadStringField(m map[string]any, key string) string {
 	default:
 		return fmt.Sprint(t)
 	}
+}
+
+// MaxMapInt 返回 map 中的最大 value
+// ok=false 表示 map 为空
+func MaxMapInt(m map[string]int) (max int, ok bool) {
+	for _, v := range m {
+		if !ok || v > max {
+			max = v
+			ok = true
+		}
+	}
+	return
 }

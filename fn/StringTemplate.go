@@ -517,11 +517,11 @@ func init() {
 func ParseTemplateTest() {
 	// 示例模板文本
 	inputText := `
-		<%= len(人物) %>
+		<%=  number(age)  %>
 		<% if contains(文章名称, "1汤姆叔叔") %>
 		你是成年人。
-		<% elseif len(title) == 8 %>
-		刚好 18  
+		<% elseif number(age) > 8 %>
+		刚好 +8  
 		<% else %>
 		你还未成年。
 		<% end %>
@@ -541,10 +541,10 @@ func ParseTemplateTest() {
 	// 检查模型参数是否合法（这里只是示例模型）
 	// 准备渲染模板的数据（只替换部分占位符）
 	renderModel := map[string]any{
-		"文章名称": "汤姆叔叔的小屋",
-		"人物":     "主人公和发生地点",
-		"age":      18,
-		"title":    "主人公和发生地点",
+		"文章名称":  "汤姆叔叔的小屋",
+		"人物":    "主人公和发生地点",
+		"age":   "18",
+		"title": "主人公和发生地点",
 	}
 	if err := CheckModelValid(renderModel); err != nil {
 		fmt.Println("模型参数不合法：", err)

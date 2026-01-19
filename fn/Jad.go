@@ -2,6 +2,7 @@ package fn
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -21,15 +22,12 @@ func IsDataEmpty(v any) bool {
 	if v == nil {
 		return true
 	}
-	switch val := v.(type) {
-	case string:
-		return val == ""
-	case []any:
-		return len(val) == 0
-	case []string:
-		return len(val) == 0
-	case map[string]any:
-		return len(val) == 0
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.String:
+		return rv.Len() == 0
+	case reflect.Slice, reflect.Array, reflect.Map:
+		return rv.Len() == 0
 	default:
 		return false
 	}

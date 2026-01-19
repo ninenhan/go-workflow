@@ -8,8 +8,10 @@ require (
 	github.com/Knetic/govaluate v3.0.0+incompatible
 	github.com/bwmarrin/snowflake v0.3.0
 	github.com/dop251/goja v0.0.0-20250309171923-bcd7cc6bf64c
+	github.com/expr-lang/expr v1.17.7
 	github.com/google/uuid v1.6.0
 	github.com/ninenhan/go-profile v1.0.6
+	github.com/shopspring/decimal v1.4.0
 	golang.org/x/crypto v0.22.0
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa
 	gorm.io/datatypes v1.2.5

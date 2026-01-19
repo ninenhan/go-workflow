@@ -9,6 +9,10 @@ func Ptr[T any](v T) *T {
 	return &v
 }
 
+func Dtr(row interface{}) interface{} {
+	return reflect.ValueOf(row)
+}
+
 func normalizeValue(v reflect.Value) interface{} {
 	if !v.IsValid() {
 		return ""
@@ -45,4 +49,11 @@ func DeRef(row []interface{}) []interface{} {
 		out = append(out, normalizeValue(reflect.ValueOf(v)))
 	}
 	return out
+}
+
+func Int(p *int) int {
+	if p != nil {
+		return *p
+	}
+	return 0
 }
