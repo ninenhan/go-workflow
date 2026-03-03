@@ -1,8 +1,6 @@
 module github.com/ninenhan/go-workflow
 
-go 1.23.0
-
-toolchain go1.23.2
+go 1.24.6
 
 require (
 	github.com/Knetic/govaluate v3.0.0+incompatible

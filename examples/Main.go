@@ -1,15 +1,12 @@
-package main
+package tests
 
-import (
-	core "github.com/ninenhan/go-workflow"
-	"github.com/ninenhan/go-workflow/units"
-)
+import "github.com/ninenhan/go-workflow/fn"
 
 func main() {
-	//fn.ParseTemplateTest()
+	fn.ParseTemplateTest()
 	//FlowUnitsTests()
 	//AccessNetWorkTests()
 	//DagGraphTests()
-	units.AutoRegister()
-	core.Test_Json_To_Graph()
+	//units.AutoRegister()
+	//core.Test_Json_To_Graph()
 }

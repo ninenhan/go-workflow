@@ -62,7 +62,8 @@ func NewHttpUnit() HttpUnit {
 }
 
 func init() {
-	//unit := &HttpUnit{}
-	//// 自动注册 HttpUnit，注意这里注册的是非指针类型
-	//core.RegisterUnit(unit.GetUnitName(), unit)
+	{
+		unit := &HttpUnit{}
+		core.RegisterUnit(unit.GetUnitName(), unit)
+	}
 }

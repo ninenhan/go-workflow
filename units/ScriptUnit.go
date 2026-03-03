@@ -1,28 +1,35 @@
 package units
 
 import (
+	"context"
 	"fmt"
-	"github.com/dop251/goja"
-	"github.com/ninenhan/go-workflow/flow"
 	"reflect"
 	"strings"
+
+	"github.com/dop251/goja"
+	core "github.com/ninenhan/go-workflow"
 )
 
 // ScriptUnit ===== ScriptUnit 动态 JS 执行单元 =====
 type ScriptUnit struct {
-	flow.BaseUnit
+	core.Unit
 	Script string `json:"script"` // JavaScript 脚本代码
 }
+
+var _ core.ExecutableUnit = (*ScriptUnit)(nil)
 
 func (t *ScriptUnit) GetUnitName() string {
 	return reflect.TypeOf(ScriptUnit{}).Name()
 }
 
-func (t *ScriptUnit) Execute(ctx *flow.PipelineContext, input *flow.Input) (*flow.Output, error) {
+func (t *ScriptUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
 	vm := goja.New()
 	// 注入上下文变量
-	for k, v := range ctx.Env {
-		_ = vm.Set("$"+k, v)
+	for k, v := range state {
+		if v == nil {
+			continue
+		}
+		_ = vm.Set("$"+k, v.Data)
 	}
 	defaultValue, err := vm.RunString(t.Script)
 	if err != nil {
@@ -40,15 +47,14 @@ func (t *ScriptUnit) Execute(ctx *flow.PipelineContext, input *flow.Input) (*flo
 		}
 	}
 
-	if t.IOConfig == nil {
-		t.IOConfig = &flow.IOConfig{}
-	}
+	return &core.ExecutionResult{
+		NodeName: t.UnitName,
+		Data:     result,
+	}, nil
+}
 
-	o := &flow.Output{
-		Data: result,
-	}
-	t.IOConfig.Output = *o
-	return o, nil
+func (t *ScriptUnit) GetUnitMeta() *core.Unit {
+	return &t.Unit
 }
 
 func NewScriptUnit(script string) ScriptUnit {
@@ -61,6 +67,5 @@ func NewScriptUnit(script string) ScriptUnit {
 
 func init() {
 	unit := &ScriptUnit{}
-	// 自动注册 HttpUnit，注意这里注册的是非指针类型
-	flow.RegisterUnit(unit.GetUnitName(), unit)
+	core.RegisterUnit(unit.GetUnitName(), unit)
 }

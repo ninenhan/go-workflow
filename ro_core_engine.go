@@ -46,6 +46,7 @@ func BuildGraphFromJSON(data []byte) (*Graph, error) {
 			ID:      id,
 			Name:    nodeDef.Name,
 			Input:   nodeDef.Input,
+			Params:  nodeDef.Params,
 			Execute: executable.Execute,
 		}
 	}

@@ -1,27 +1,34 @@
 package units
 
 import (
-	"github.com/ninenhan/go-workflow/flow"
+	"context"
 	"reflect"
+
+	core "github.com/ninenhan/go-workflow"
 )
 
 type LogicUnit struct {
-	flow.BaseUnit
+	core.Unit
 }
+
+var _ core.ExecutableUnit = (*LogicUnit)(nil)
 
 func (t *LogicUnit) GetUnitName() string {
 	return reflect.TypeOf(LogicUnit{}).Name()
 }
 
-func (t *LogicUnit) Execute(ctx *flow.PipelineContext, i *flow.Input) (*flow.Output, error) {
-	if t.IOConfig == nil {
-		t.IOConfig = &flow.IOConfig{}
+func (t *LogicUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
+	if self == nil || self.Input == nil {
+		return &core.ExecutionResult{NodeName: t.UnitName}, nil
 	}
-	o := &flow.Output{
-		Data: i.Data,
-	}
-	t.IOConfig.Output = *o
-	return o, nil
+	return &core.ExecutionResult{
+		NodeName: t.UnitName,
+		Data:     self.Input.Data,
+	}, nil
+}
+
+func (t *LogicUnit) GetUnitMeta() *core.Unit {
+	return &t.Unit
 }
 
 func NewLogUnit() LogicUnit {
@@ -32,6 +39,5 @@ func NewLogUnit() LogicUnit {
 
 func init() {
 	unit := &LogicUnit{}
-	// 自动注册 HttpUnit，注意这里注册的是非指针类型
-	flow.RegisterUnit(unit.GetUnitName(), unit)
+	core.RegisterUnit(unit.GetUnitName(), unit)
 }

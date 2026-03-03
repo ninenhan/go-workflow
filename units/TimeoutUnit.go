@@ -1,37 +1,44 @@
 package units
 
 import (
+	"context"
 	"fmt"
-	"github.com/ninenhan/go-workflow/flow"
 	"reflect"
 	"strconv"
 	"time"
+
+	core "github.com/ninenhan/go-workflow"
 )
 
 type TimeoutUnit struct {
-	flow.BaseUnit
+	core.Unit
 }
+
+var _ core.ExecutableUnit = (*TimeoutUnit)(nil)
 
 func (t *TimeoutUnit) GetUnitName() string {
 	return reflect.TypeOf(TimeoutUnit{}).Name()
 }
 
-func (t *TimeoutUnit) Execute(ctx *flow.PipelineContext, i *flow.Input) (*flow.Output, error) {
-	val, ok := i.Data.(string)
+func (t *TimeoutUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
 	timeout := 1 * time.Second
-	if ok {
-		// parseInt val
-		t, err := strconv.ParseInt(val, 10, 64)
-		if err == nil {
-			timeout = time.Duration(t) * time.Millisecond
+	if self != nil && self.Input != nil {
+		if val, ok := self.Input.Data.(string); ok {
+			if tms, err := strconv.ParseInt(val, 10, 64); err == nil {
+				timeout = time.Duration(tms) * time.Millisecond
+			}
 		}
 	}
 	select {
 	case <-time.After(timeout):
-		return nil, nil
-	case <-ctx.Context.Done():
-		return nil, fmt.Errorf("TimeoutUnit 被中断: %w", ctx.Context.Err())
+		return &core.ExecutionResult{NodeName: t.UnitName}, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("TimeoutUnit interrupted: %w", ctx.Err())
 	}
+}
+
+func (t *TimeoutUnit) GetUnitMeta() *core.Unit {
+	return &t.Unit
 }
 
 func NewTimeoutUnit() TimeoutUnit {
@@ -42,6 +49,5 @@ func NewTimeoutUnit() TimeoutUnit {
 
 func init() {
 	unit := &TimeoutUnit{}
-	// 自动注册 HttpUnit，注意这里注册的是非指针类型
-	flow.RegisterUnit(unit.GetUnitName(), unit)
+	core.RegisterUnit(unit.GetUnitName(), unit)
 }

@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ninenhan.github.io/go-workflow/schema/workflow.schema.json",
+  "title": "WorkflowDefinition",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "start": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "nodes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/nodeSpec"
+      },
+      "minProperties": 1
+    },
+    "edges": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/edgeSpec"
+          }
+        }
+      ]
+    }
+  },
+  "required": [
+    "nodes"
+  ],
+  "$defs": {
+    "duration": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "number"
+        }
+      ]
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "data": {},
+        "data_type": {
+          "type": "string",
+          "enum": [
+            "plaintext",
+            "json",
+            "json_array",
+            "socket"
+          ]
+        },
+        "slottable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "nodeOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeout": {
+          "$ref": "#/$defs/duration"
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retry_backoff": {
+          "$ref": "#/$defs/duration"
+        },
+        "retry_backoff_max": {
+          "$ref": "#/$defs/duration"
+        },
+        "join": {
+          "type": "string",
+          "enum": [
+            "any",
+            "all"
+          ]
+        },
+        "continue_on_error": {
+          "type": "boolean"
+        },
+        "branch_mode": {
+          "type": "string",
+          "enum": [
+            "all",
+            "first"
+          ]
+        }
+      }
+    },
+    "nodeSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "unit_id": {
+          "type": "string"
+        },
+        "input": {
+          "$ref": "#/$defs/input"
+        },
+        "params": {
+          "type": "object"
+        },
+        "export_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "$ref": "#/$defs/nodeOptions"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "exec",
+            "config",
+            "trigger"
+          ]
+        },
+        "run_mode": {
+          "type": "string",
+          "enum": [
+            "lazy",
+            "eager",
+            "manual"
+          ]
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "unit"
+          ]
+        },
+        {
+          "required": [
+            "unit_id"
+          ]
+        }
+      ]
+    },
+    "edgeSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "when": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "order": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    }
+  }
+}

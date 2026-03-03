@@ -30,11 +30,13 @@ type Input struct {
 }
 
 type ExecutionResult struct {
-	NodeName string `json:"node_name,omitempty"`
-	Data     any    `json:"data,omitempty"`
-	Stream   bool   `json:"stream,omitempty"`
-	Raw      any    `json:"raw,omitempty"`
-	Error    string `json:"error,omitempty"`
+	NodeName      string        `json:"node_name,omitempty"`
+	Data          any           `json:"data,omitempty"`
+	Stream        bool          `json:"stream,omitempty"`
+	Raw           any           `json:"raw,omitempty"`
+	Error         string        `json:"error,omitempty"`
+	Control       ControlSignal `json:"control,omitempty"`
+	ControlTarget string        `json:"control_target,omitempty"`
 }
 
 func SimpleResult(data any) *ExecutionResult {
@@ -51,6 +53,7 @@ type Node struct {
 	ID           string
 	Name         string
 	Input        *Input
+	Params       map[string]any
 	Execute      NodeFunc
 	Branch       BranchFunc            // 可选分支函数
 	Parallel     bool                  // 是否并行节点
@@ -228,8 +231,14 @@ func (g *Graph) RunWithDSL(ctx context.Context, state ContextMap) error {
 				continue
 			}
 			if resultMap, ok := result.Data.(map[string]any); ok {
+				sub, ok := exported[nodeName].(map[string]any)
+				if !ok || sub == nil {
+					sub = make(map[string]any)
+					exported[nodeName] = sub
+				}
 				for _, field := range node.ExportFields {
 					if val, exists := resultMap[field]; exists {
+						sub[field] = val
 						exported[fmt.Sprintf("%s.%s", nodeName, field)] = val
 					}
 				}

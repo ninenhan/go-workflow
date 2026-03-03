@@ -1,21 +1,29 @@
 package units
 
 import (
+	"context"
 	"fmt"
-	"github.com/ninenhan/go-workflow/flow"
 	"reflect"
+
+	core "github.com/ninenhan/go-workflow"
 )
 
 type TerminalUnit struct {
-	flow.BaseUnit
+	core.Unit
 }
+
+var _ core.ExecutableUnit = (*TerminalUnit)(nil)
 
 func (t *TerminalUnit) GetUnitName() string {
 	return reflect.TypeOf(TerminalUnit{}).Name()
 }
 
-func (t *TerminalUnit) Execute(ctx *flow.PipelineContext, i *flow.Input) (*flow.Output, error) {
+func (t *TerminalUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
 	return nil, fmt.Errorf("TerminalUnit %s", "执行结束")
+}
+
+func (t *TerminalUnit) GetUnitMeta() *core.Unit {
+	return &t.Unit
 }
 
 func NewTerminalUnit() TerminalUnit {
@@ -26,6 +34,5 @@ func NewTerminalUnit() TerminalUnit {
 
 func init() {
 	unit := &TerminalUnit{}
-	// 自动注册 HttpUnit，注意这里注册的是非指针类型
-	flow.RegisterUnit(unit.GetUnitName(), unit)
+	core.RegisterUnit(unit.GetUnitName(), unit)
 }
