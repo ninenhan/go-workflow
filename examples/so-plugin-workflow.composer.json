@@ -1,0 +1,45 @@
+{
+  "definition": {
+    "id": "wf-so-plugin-smoke",
+    "name": "SO Plugin Smoke Test",
+    "start": [
+      "so_upper"
+    ],
+    "nodes": {
+      "so_upper": {
+        "id": "so_upper",
+        "name": "SO Uppercase",
+        "unit": "UppercaseUnitSO",
+        "input": {
+          "data": "hello from so plugin",
+          "data_type": "plaintext"
+        },
+        "params": {}
+      },
+      "done": {
+        "id": "done",
+        "name": "Done",
+        "unit": "LogicUnit",
+        "params": {}
+      }
+    },
+    "edges": [
+      {
+        "from": "so_upper",
+        "to": "done"
+      }
+    ]
+  },
+  "layout": {
+    "nodes": {
+      "so_upper": {
+        "x": 120,
+        "y": 140
+      },
+      "done": {
+        "x": 420,
+        "y": 140
+      }
+    }
+  }
+}

@@ -167,6 +167,41 @@ Then use unit `"UppercaseUnit"` directly in workflow JSON.
 Note: `RegisterUnit` is kept for backward compatibility and may use reflection internally.  
 For new code, prefer `RegisterUnitFactory` for explicit, reflection-free instantiation.
 
+## SO Plugins (Restart to Load)
+This repo also supports startup loading for Go `.so` plugins (jar-like drop-in with restart).
+
+Host-side loading:
+```go
+cwd := "/path/to/workflow-app"
+pluginDir := workflow.DefaultPluginDir(cwd) // plugins/<goos>-<goarch>
+loaded, err := workflow.LoadUnitPlugins(pluginDir, nil)
+if err != nil {
+    return err
+}
+_ = loaded
+```
+
+Plugin contract:
+1. Build plugin with `-buildmode=plugin`
+2. Export register symbol `WorkflowRegister`
+3. Register units via `workflow.RegisterUnitFactory(...)`
+
+Example plugin source:
+1. `plugins/so/uppercase/main.go`
+
+Build command (example):
+```bash
+GOOS=linux GOARCH=amd64 \
+go build -buildmode=plugin \
+  -o plugins/linux-amd64/uppercase.so \
+  ./plugins/so/uppercase
+```
+
+Important compatibility constraints:
+1. Host and plugin must use same `GOOS/GOARCH`
+2. Go version should match exactly
+3. Shared dependency versions must match
+
 ## Tests
 Existing cases:
 1. Create wf -> run -> assert result
