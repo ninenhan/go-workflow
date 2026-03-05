@@ -48,6 +48,9 @@ func NewTimeoutUnit() TimeoutUnit {
 }
 
 func init() {
-	unit := &TimeoutUnit{}
-	core.RegisterUnit(unit.GetUnitName(), unit)
+	core.RegisterUnitFactory("TimeoutUnit", func() core.ExecutableUnit {
+		unit := &TimeoutUnit{}
+		unit.UnitName = unit.GetUnitName()
+		return unit
+	})
 }

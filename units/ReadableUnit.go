@@ -51,8 +51,11 @@ func NewReadableUnit() ReadableUnit {
 }
 
 func init() {
-	unit := &ReadableUnit{}
-	core.RegisterUnit(unit.GetUnitName(), unit)
+	core.RegisterUnitFactory("ReadableUnit", func() core.ExecutableUnit {
+		unit := &ReadableUnit{}
+		unit.UnitName = unit.GetUnitName()
+		return unit
+	})
 }
 
 func toReader(ctx context.Context, data any) (io.Reader, error) {

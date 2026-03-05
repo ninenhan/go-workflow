@@ -24,13 +24,13 @@ func (u *WhileUnit) GetUnitName() string {
 }
 
 type whileParams struct {
-	Condition   string                     `json:"condition"`
-	Max         int                        `json:"max"`
-	Body        *core.WorkflowDefinition   `json:"body"`
-	Start       []string                   `json:"start,omitempty"`
-	ResultNode  string                     `json:"result_node,omitempty"`
-	Concurrency int                        `json:"concurrency,omitempty"`
-	FailFast    *bool                      `json:"fail_fast,omitempty"`
+	Condition   string                   `json:"condition"`
+	Max         int                      `json:"max"`
+	Body        *core.WorkflowDefinition `json:"body"`
+	Start       []string                 `json:"start,omitempty"`
+	ResultNode  string                   `json:"result_node,omitempty"`
+	Concurrency int                      `json:"concurrency,omitempty"`
+	FailFast    *bool                    `json:"fail_fast,omitempty"`
 }
 
 type loopEnv struct {
@@ -43,7 +43,7 @@ func (u *WhileUnit) Execute(ctx context.Context, state core.ContextMap, self *co
 	if self == nil {
 		return nil, errors.New("WhileUnit: missing node")
 	}
-	params, err := fn.ConvertByJSON[any, whileParams](self.Params)
+	params, err := decodeWhileParams(self.Params)
 	if err != nil {
 		return nil, fmt.Errorf("WhileUnit: invalid params: %w", err)
 	}
@@ -149,6 +149,21 @@ func (u *WhileUnit) Execute(ctx context.Context, state core.ContextMap, self *co
 	return finalizeWhile(iterations, lastResult), nil
 }
 
+// decodeWhileParams keeps backward compatibility with JSON-based params,
+// but preserves a directly provided body definition pointer when available.
+func decodeWhileParams(raw map[string]any) (whileParams, error) {
+	params, err := fn.ConvertByJSON[any, whileParams](raw)
+	if err != nil {
+		return whileParams{}, err
+	}
+	if bodyRaw, ok := raw["body"]; ok {
+		if body, ok := bodyRaw.(*core.WorkflowDefinition); ok {
+			params.Body = body
+		}
+	}
+	return params, nil
+}
+
 func (u *WhileUnit) GetUnitMeta() *core.Unit {
 	return &u.Unit
 }
@@ -190,6 +205,9 @@ func extractResults(state *core.ExecutionState) map[string]*core.ExecutionResult
 }
 
 func init() {
-	unit := &WhileUnit{}
-	core.RegisterUnit(unit.GetUnitName(), unit)
+	core.RegisterUnitFactory("WhileUnit", func() core.ExecutableUnit {
+		unit := &WhileUnit{}
+		unit.UnitName = unit.GetUnitName()
+		return unit
+	})
 }

@@ -66,6 +66,9 @@ func NewScriptUnit(script string) ScriptUnit {
 }
 
 func init() {
-	unit := &ScriptUnit{}
-	core.RegisterUnit(unit.GetUnitName(), unit)
+	core.RegisterUnitFactory("ScriptUnit", func() core.ExecutableUnit {
+		unit := &ScriptUnit{}
+		unit.UnitName = unit.GetUnitName()
+		return unit
+	})
 }

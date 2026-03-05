@@ -48,6 +48,9 @@ func NewSetEnvUnit() SetEnvUnit {
 }
 
 func init() {
-	unit := &SetEnvUnit{}
-	core.RegisterUnit(unit.GetUnitName(), unit)
+	core.RegisterUnitFactory("SetEnvUnit", func() core.ExecutableUnit {
+		unit := &SetEnvUnit{}
+		unit.UnitName = unit.GetUnitName()
+		return unit
+	})
 }

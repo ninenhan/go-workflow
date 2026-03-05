@@ -193,13 +193,13 @@ func (e *Engine) Resume(ctx context.Context, def *WorkflowDefinition, runID stri
 }
 
 type RunOptions struct {
-	RunID       string
-	Start       []string
-	Concurrency int
-	Store       StateStore
-	Sink        EventSink
-	FailFast    *bool
-	AllowCycles bool
+	RunID         string
+	Start         []string
+	Concurrency   int
+	Store         StateStore
+	Sink          EventSink
+	FailFast      *bool
+	AllowCycles   bool
 	StopOnControl bool
 	SeedState     ContextMap
 	SeedExports   map[string][]string
@@ -680,15 +680,14 @@ func (e *Engine) Run(ctx context.Context, def *WorkflowDefinition, opts *RunOpti
 
 	wg.Wait()
 
-	if ctxRun.Err() != nil && runErr.Load() == nil {
-		runErr.Store(ctxRun.Err())
-	}
-
 	var controlErr *ControlSignalError
 	if v := controlSignal.Load(); v != nil {
 		if ce, ok := v.(*ControlSignalError); ok {
 			controlErr = ce
 		}
+	}
+	if ctxRun.Err() != nil && runErr.Load() == nil && !(controlErr != nil && stopOnControl) {
+		runErr.Store(ctxRun.Err())
 	}
 
 	stateMu.Lock()

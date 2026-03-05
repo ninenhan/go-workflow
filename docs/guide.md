@@ -153,6 +153,20 @@ workflow.RegisterUnitFactory("MyUnit", func() workflow.ExecutableUnit {
 })
 ```
 
+Auto registration pattern (workflow plugin style):
+1. Put unit code in a standalone package
+2. Register in package `init()` with `RegisterUnitFactory`
+3. Trigger registration using blank import
+
+```go
+import _ "github.com/ninenhan/go-workflow/plugins/uppercase"
+```
+
+Then use unit `"UppercaseUnit"` directly in workflow JSON.
+
+Note: `RegisterUnit` is kept for backward compatibility and may use reflection internally.  
+For new code, prefer `RegisterUnitFactory` for explicit, reflection-free instantiation.
+
 ## Tests
 Existing cases:
 1. Create wf -> run -> assert result

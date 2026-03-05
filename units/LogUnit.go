@@ -38,6 +38,11 @@ func NewLogUnit() LogicUnit {
 }
 
 func init() {
-	unit := &LogicUnit{}
-	core.RegisterUnit(unit.GetUnitName(), unit)
+	factory := func() core.ExecutableUnit {
+		unit := &LogicUnit{}
+		unit.UnitName = unit.GetUnitName()
+		return unit
+	}
+	core.RegisterUnitFactory("LogicUnit", factory)
+	core.RegisterUnitFactory("LogUnit", factory)
 }

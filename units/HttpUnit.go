@@ -62,8 +62,9 @@ func NewHttpUnit() HttpUnit {
 }
 
 func init() {
-	{
+	core.RegisterUnitFactory("HttpUnit", func() core.ExecutableUnit {
 		unit := &HttpUnit{}
-		core.RegisterUnit(unit.GetUnitName(), unit)
-	}
+		unit.UnitName = unit.GetUnitName()
+		return unit
+	})
 }

@@ -71,12 +71,19 @@ func (u *GotoUnit) GetUnitMeta() *core.Unit {
 }
 
 func init() {
-	{
+	core.RegisterUnitFactory("BreakUnit", func() core.ExecutableUnit {
 		unit := &BreakUnit{}
-		core.RegisterUnit(unit.GetUnitName(), unit)
-	}
-	{
+		unit.UnitName = unit.GetUnitName()
+		return unit
+	})
+	core.RegisterUnitFactory("ContinueUnit", func() core.ExecutableUnit {
 		unit := &ContinueUnit{}
-		core.RegisterUnit(unit.GetUnitName(), unit)
-	}
+		unit.UnitName = unit.GetUnitName()
+		return unit
+	})
+	core.RegisterUnitFactory("GotoUnit", func() core.ExecutableUnit {
+		unit := &GotoUnit{}
+		unit.UnitName = unit.GetUnitName()
+		return unit
+	})
 }
