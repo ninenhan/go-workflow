@@ -1,0 +1,77 @@
+{
+  "id": "wf-input-binding-demo",
+  "name": "input binding demo",
+  "entry_nodes": [
+    "user",
+    "score"
+  ],
+  "nodes": [
+    {
+      "id": "user",
+      "name": "user",
+      "executor": {
+        "type": "unit",
+        "ref": "RemarkUnit"
+      },
+      "input": {
+        "name": "alice"
+      }
+    },
+    {
+      "id": "score",
+      "name": "score",
+      "executor": {
+        "type": "unit",
+        "ref": "RemarkUnit"
+      },
+      "input": {
+        "value": 98
+      }
+    },
+    {
+      "id": "summary",
+      "name": "summary",
+      "executor": {
+        "type": "unit",
+        "ref": "LogUnit"
+      },
+      "input": {
+        "kind": "summary"
+      },
+      "input_spec": {
+        "mode": "object",
+        "bindings": [
+          {
+            "from": "user",
+            "path": "name",
+            "as": "user",
+            "required": true,
+            "transform": "Value + \"-vip\""
+          },
+          {
+            "from": "score",
+            "path": "value",
+            "as": "score",
+            "required": true
+          },
+          {
+            "from": "user",
+            "path": "title",
+            "as": "title",
+            "default": "guest"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "user",
+      "to": "summary"
+    },
+    {
+      "from": "score",
+      "to": "summary"
+    }
+  ]
+}

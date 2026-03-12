@@ -7,20 +7,20 @@ import (
 	"strconv"
 	"time"
 
-	core "github.com/ninenhan/go-workflow"
+	unit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
 type TimeoutUnit struct {
-	core.Unit
+	unit.Unit
 }
 
-var _ core.ExecutableUnit = (*TimeoutUnit)(nil)
+var _ unit.ExecutableUnit = (*TimeoutUnit)(nil)
 
 func (t *TimeoutUnit) GetUnitName() string {
 	return reflect.TypeOf(TimeoutUnit{}).Name()
 }
 
-func (t *TimeoutUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
+func (t *TimeoutUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
 	timeout := 1 * time.Second
 	if self != nil && self.Input != nil {
 		if val, ok := self.Input.Data.(string); ok {
@@ -31,13 +31,13 @@ func (t *TimeoutUnit) Execute(ctx context.Context, state core.ContextMap, self *
 	}
 	select {
 	case <-time.After(timeout):
-		return &core.ExecutionResult{NodeName: t.UnitName}, nil
+		return &unit.ExecutionResult{NodeName: t.UnitName}, nil
 	case <-ctx.Done():
 		return nil, fmt.Errorf("TimeoutUnit interrupted: %w", ctx.Err())
 	}
 }
 
-func (t *TimeoutUnit) GetUnitMeta() *core.Unit {
+func (t *TimeoutUnit) GetUnitMeta() *unit.Unit {
 	return &t.Unit
 }
 
@@ -48,7 +48,7 @@ func NewTimeoutUnit() TimeoutUnit {
 }
 
 func init() {
-	core.RegisterUnitFactory("TimeoutUnit", func() core.ExecutableUnit {
+	unit.RegisterUnitFactory("TimeoutUnit", func() unit.ExecutableUnit {
 		unit := &TimeoutUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit

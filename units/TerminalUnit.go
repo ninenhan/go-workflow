@@ -5,24 +5,24 @@ import (
 	"fmt"
 	"reflect"
 
-	core "github.com/ninenhan/go-workflow"
+	unit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
 type TerminalUnit struct {
-	core.Unit
+	unit.Unit
 }
 
-var _ core.ExecutableUnit = (*TerminalUnit)(nil)
+var _ unit.ExecutableUnit = (*TerminalUnit)(nil)
 
 func (t *TerminalUnit) GetUnitName() string {
 	return reflect.TypeOf(TerminalUnit{}).Name()
 }
 
-func (t *TerminalUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
+func (t *TerminalUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
 	return nil, fmt.Errorf("TerminalUnit %s", "执行结束")
 }
 
-func (t *TerminalUnit) GetUnitMeta() *core.Unit {
+func (t *TerminalUnit) GetUnitMeta() *unit.Unit {
 	return &t.Unit
 }
 
@@ -33,7 +33,7 @@ func NewTerminalUnit() TerminalUnit {
 }
 
 func init() {
-	core.RegisterUnitFactory("TerminalUnit", func() core.ExecutableUnit {
+	unit.RegisterUnitFactory("TerminalUnit", func() unit.ExecutableUnit {
 		unit := &TerminalUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit

@@ -4,84 +4,84 @@ import (
 	"context"
 	"reflect"
 
-	core "github.com/ninenhan/go-workflow"
+	unit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
 type BreakUnit struct {
-	core.Unit
+	unit.Unit
 }
 
-var _ core.ExecutableUnit = (*BreakUnit)(nil)
+var _ unit.ExecutableUnit = (*BreakUnit)(nil)
 
 func (u *BreakUnit) GetUnitName() string {
 	return reflect.TypeOf(BreakUnit{}).Name()
 }
 
-func (u *BreakUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
-	return &core.ExecutionResult{
+func (u *BreakUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
+	return &unit.ExecutionResult{
 		NodeName: u.UnitName,
-		Control:  core.ControlBreak,
+		Control:  unit.ControlBreak,
 	}, nil
 }
 
-func (u *BreakUnit) GetUnitMeta() *core.Unit {
+func (u *BreakUnit) GetUnitMeta() *unit.Unit {
 	return &u.Unit
 }
 
 type ContinueUnit struct {
-	core.Unit
+	unit.Unit
 }
 
-var _ core.ExecutableUnit = (*ContinueUnit)(nil)
+var _ unit.ExecutableUnit = (*ContinueUnit)(nil)
 
 func (u *ContinueUnit) GetUnitName() string {
 	return reflect.TypeOf(ContinueUnit{}).Name()
 }
 
-func (u *ContinueUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
-	return &core.ExecutionResult{
+func (u *ContinueUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
+	return &unit.ExecutionResult{
 		NodeName: u.UnitName,
-		Control:  core.ControlContinue,
+		Control:  unit.ControlContinue,
 	}, nil
 }
 
-func (u *ContinueUnit) GetUnitMeta() *core.Unit {
+func (u *ContinueUnit) GetUnitMeta() *unit.Unit {
 	return &u.Unit
 }
 
 type GotoUnit struct {
-	core.Unit
+	unit.Unit
 }
 
-var _ core.ExecutableUnit = (*GotoUnit)(nil)
+var _ unit.ExecutableUnit = (*GotoUnit)(nil)
 
 func (u *GotoUnit) GetUnitName() string {
 	return reflect.TypeOf(GotoUnit{}).Name()
 }
 
-func (u *GotoUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
-	return &core.ExecutionResult{
+func (u *GotoUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
+	return &unit.ExecutionResult{
 		NodeName: u.UnitName,
-		Control:  core.ControlGoto,
+		Control:  unit.ControlGoto,
 	}, nil
 }
 
-func (u *GotoUnit) GetUnitMeta() *core.Unit {
+func (u *GotoUnit) GetUnitMeta() *unit.Unit {
 	return &u.Unit
 }
 
 func init() {
-	core.RegisterUnitFactory("BreakUnit", func() core.ExecutableUnit {
+	unit.RegisterUnitFactory("BreakUnit", func() unit.ExecutableUnit {
 		unit := &BreakUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit
 	})
-	core.RegisterUnitFactory("ContinueUnit", func() core.ExecutableUnit {
+	unit.RegisterUnitFactory("ContinueUnit", func() unit.ExecutableUnit {
 		unit := &ContinueUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit
 	})
-	core.RegisterUnitFactory("GotoUnit", func() core.ExecutableUnit {
+	unit.RegisterUnitFactory("GotoUnit", func() unit.ExecutableUnit {
 		unit := &GotoUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit

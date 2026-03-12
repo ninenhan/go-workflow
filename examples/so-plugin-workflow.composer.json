@@ -1,10 +1,5 @@
 {
   "definition": {
-    "id": "wf-so-plugin-smoke",
-    "name": "SO Plugin Smoke Test",
-    "start": [
-      "so_upper"
-    ],
     "nodes": {
       "so_upper": {
         "id": "so_upper",
@@ -28,7 +23,12 @@
         "from": "so_upper",
         "to": "done"
       }
-    ]
+    ],
+    "start": [
+      "so_upper"
+    ],
+    "id": "wf-so-plugin-smoke",
+    "name": "SO Plugin Smoke Test"
   },
   "layout": {
     "nodes": {
@@ -37,9 +37,10 @@
         "y": 140
       },
       "done": {
-        "x": 420,
-        "y": 140
+        "x": 500,
+        "y": 143
       }
-    }
+    },
+    "subflows": {}
   }
 }

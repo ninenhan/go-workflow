@@ -4,30 +4,30 @@ import (
 	"context"
 	"reflect"
 
-	core "github.com/ninenhan/go-workflow"
+	unit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
 type RemarkUnit struct {
-	core.Unit
+	unit.Unit
 }
 
-var _ core.ExecutableUnit = (*RemarkUnit)(nil)
+var _ unit.ExecutableUnit = (*RemarkUnit)(nil)
 
 func (t *RemarkUnit) GetUnitName() string {
 	return reflect.TypeOf(RemarkUnit{}).Name()
 }
 
-func (t *RemarkUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
+func (t *RemarkUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
 	if self == nil || self.Input == nil {
-		return &core.ExecutionResult{NodeName: t.UnitName}, nil
+		return &unit.ExecutionResult{NodeName: t.UnitName}, nil
 	}
-	return &core.ExecutionResult{
+	return &unit.ExecutionResult{
 		NodeName: t.UnitName,
 		Data:     self.Input.Data,
 	}, nil
 }
 
-func (t *RemarkUnit) GetUnitMeta() *core.Unit {
+func (t *RemarkUnit) GetUnitMeta() *unit.Unit {
 	return &t.Unit
 }
 
@@ -38,7 +38,7 @@ func NewRemarkUnit() RemarkUnit {
 }
 
 func init() {
-	core.RegisterUnitFactory("RemarkUnit", func() core.ExecutableUnit {
+	unit.RegisterUnitFactory("RemarkUnit", func() unit.ExecutableUnit {
 		unit := &RemarkUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit

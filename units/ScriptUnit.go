@@ -7,22 +7,22 @@ import (
 	"strings"
 
 	"github.com/dop251/goja"
-	core "github.com/ninenhan/go-workflow"
+	unit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
 // ScriptUnit ===== ScriptUnit 动态 JS 执行单元 =====
 type ScriptUnit struct {
-	core.Unit
+	unit.Unit
 	Script string `json:"script"` // JavaScript 脚本代码
 }
 
-var _ core.ExecutableUnit = (*ScriptUnit)(nil)
+var _ unit.ExecutableUnit = (*ScriptUnit)(nil)
 
 func (t *ScriptUnit) GetUnitName() string {
 	return reflect.TypeOf(ScriptUnit{}).Name()
 }
 
-func (t *ScriptUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
+func (t *ScriptUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
 	vm := goja.New()
 	// 注入上下文变量
 	for k, v := range state {
@@ -47,13 +47,13 @@ func (t *ScriptUnit) Execute(ctx context.Context, state core.ContextMap, self *c
 		}
 	}
 
-	return &core.ExecutionResult{
+	return &unit.ExecutionResult{
 		NodeName: t.UnitName,
 		Data:     result,
 	}, nil
 }
 
-func (t *ScriptUnit) GetUnitMeta() *core.Unit {
+func (t *ScriptUnit) GetUnitMeta() *unit.Unit {
 	return &t.Unit
 }
 
@@ -66,7 +66,7 @@ func NewScriptUnit(script string) ScriptUnit {
 }
 
 func init() {
-	core.RegisterUnitFactory("ScriptUnit", func() core.ExecutableUnit {
+	unit.RegisterUnitFactory("ScriptUnit", func() unit.ExecutableUnit {
 		unit := &ScriptUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit

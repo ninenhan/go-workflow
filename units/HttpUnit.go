@@ -3,24 +3,24 @@ package units
 import (
 	"context"
 	"errors"
-	core "github.com/ninenhan/go-workflow"
 	"github.com/ninenhan/go-workflow/fn"
 	xhttp "github.com/ninenhan/go-workflow/kit"
+	unit "github.com/ninenhan/go-workflow/worker/unit"
 	"log/slog"
 	"reflect"
 )
 
 type HttpUnit struct {
-	core.Unit
+	unit.Unit
 }
 
-var _ core.ExecutableUnit = (*HttpUnit)(nil) // ✅ 编译期检查
+var _ unit.ExecutableUnit = (*HttpUnit)(nil) // ✅ 编译期检查
 
 func (t *HttpUnit) GetUnitName() string {
 	return reflect.TypeOf(HttpUnit{}).Name()
 }
 
-func (t *HttpUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
+func (t *HttpUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
 	input := self.Input
 	request, e := fn.ConvertByJSON[any, xhttp.XRequest](input.Data)
 	if e != nil {
@@ -43,7 +43,7 @@ func (t *HttpUnit) Execute(ctx context.Context, state core.ContextMap, self *cor
 			result = append(result, message)
 		}
 	}
-	return &core.ExecutionResult{
+	return &unit.ExecutionResult{
 		NodeName: t.UnitName,
 		Data:     result,
 		Stream:   false,
@@ -51,7 +51,7 @@ func (t *HttpUnit) Execute(ctx context.Context, state core.ContextMap, self *cor
 	}, nil
 }
 
-func (t *HttpUnit) GetUnitMeta() *core.Unit {
+func (t *HttpUnit) GetUnitMeta() *unit.Unit {
 	return &t.Unit
 }
 
@@ -62,7 +62,7 @@ func NewHttpUnit() HttpUnit {
 }
 
 func init() {
-	core.RegisterUnitFactory("HttpUnit", func() core.ExecutableUnit {
+	unit.RegisterUnitFactory("HttpUnit", func() unit.ExecutableUnit {
 		unit := &HttpUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit

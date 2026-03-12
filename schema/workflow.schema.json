@@ -11,101 +11,124 @@
     "name": {
       "type": "string"
     },
-    "start": {
+    "description": {
+      "type": "string"
+    },
+    "entry_nodes": {
       "type": "array",
       "items": {
         "type": "string"
       }
     },
     "nodes": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/nodeSpec"
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
       },
-      "minProperties": 1
+      "minItems": 1
     },
     "edges": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/edgeSpec"
-          }
-        }
-      ]
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "triggers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/trigger"
+      }
+    },
+    "publish_config": {
+      "$ref": "#/$defs/publishConfig"
+    },
+    "metadata": {
+      "type": "object"
     }
   },
   "required": [
+    "id",
+    "name",
     "nodes"
   ],
   "$defs": {
     "duration": {
       "oneOf": [
         {
-          "type": "string",
-          "minLength": 1
-        },
-        {
-          "type": "number"
-        }
-      ]
-    },
-    "input": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "data": {},
-        "data_type": {
-          "type": "string",
-          "enum": [
-            "plaintext",
-            "json",
-            "json_array",
-            "socket"
-          ]
-        },
-        "slottable": {
-          "type": "boolean"
-        }
-      }
-    },
-    "nodeOptions": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "timeout": {
-          "$ref": "#/$defs/duration"
-        },
-        "retries": {
           "type": "integer",
           "minimum": 0
         },
-        "retry_backoff": {
-          "$ref": "#/$defs/duration"
-        },
-        "retry_backoff_max": {
-          "$ref": "#/$defs/duration"
-        },
-        "join": {
+        {
+          "type": "string",
+          "minLength": 1
+        }
+      ]
+    },
+    "executorSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
           "type": "string",
           "enum": [
-            "any",
-            "all"
+            "http",
+            "local_go",
+            "python",
+            "node",
+            "queue",
+            "remote",
+            "container",
+            "unit"
           ]
         },
-        "continue_on_error": {
-          "type": "boolean"
+        "ref": {
+          "type": "string"
         },
-        "branch_mode": {
+        "version": {
+          "type": "string"
+        },
+        "config": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "retryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "backoff": {
+          "$ref": "#/$defs/duration"
+        },
+        "max_backoff": {
+          "$ref": "#/$defs/duration"
+        }
+      }
+    },
+    "loopPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "condition": {
+          "type": "string"
+        }
+      }
+    },
+    "branchPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
           "type": "string",
           "enum": [
             "all",
@@ -114,7 +137,61 @@
         }
       }
     },
-    "nodeSpec": {
+    "inputBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "node",
+            "var",
+            "request",
+            "run"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "as": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "default": {},
+        "transform": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from"
+      ]
+    },
+    "inputSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "replace",
+            "object",
+            "array"
+          ]
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/inputBinding"
+          }
+        }
+      }
+    },
+    "node": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -124,87 +201,144 @@
         "name": {
           "type": "string"
         },
-        "unit": {
+        "description": {
           "type": "string"
         },
-        "unit_id": {
+        "type": {
           "type": "string"
         },
-        "input": {
-          "$ref": "#/$defs/input"
+        "executor": {
+          "$ref": "#/$defs/executorSpec"
+        },
+        "input": {},
+        "input_spec": {
+          "$ref": "#/$defs/inputSpec"
         },
         "params": {
           "type": "object"
-        },
-        "export_fields": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "options": {
-          "$ref": "#/$defs/nodeOptions"
-        },
-        "role": {
-          "type": "string",
-          "enum": [
-            "exec",
-            "config",
-            "trigger"
-          ]
-        },
-        "run_mode": {
-          "type": "string",
-          "enum": [
-            "lazy",
-            "eager",
-            "manual"
-          ]
         },
         "depends_on": {
           "type": "array",
           "items": {
             "type": "string"
           }
+        },
+        "retry": {
+          "$ref": "#/$defs/retryPolicy"
+        },
+        "loop": {
+          "$ref": "#/$defs/loopPolicy"
+        },
+        "timeout": {
+          "$ref": "#/$defs/duration"
+        },
+        "branch": {
+          "$ref": "#/$defs/branchPolicy"
+        },
+        "disabled": {
+          "type": "boolean"
+        },
+        "ui": {
+          "type": "object"
         }
       },
-      "anyOf": [
-        {
-          "required": [
-            "unit"
-          ]
-        },
-        {
-          "required": [
-            "unit_id"
-          ]
-        }
+      "required": [
+        "id",
+        "name",
+        "executor"
       ]
     },
-    "edgeSpec": {
+    "edge": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "id": {
+          "type": "string"
+        },
         "from": {
           "type": "string"
         },
         "to": {
           "type": "string"
         },
-        "when": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "back"
+          ]
+        },
+        "condition": {
           "type": "string"
+        },
+        "priority": {
+          "type": "integer"
         },
         "label": {
           "type": "string"
         },
-        "order": {
-          "type": "integer"
+        "metadata": {
+          "type": "object"
         }
       },
       "required": [
         "from",
         "to"
       ]
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "http",
+            "cron"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "config": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ]
+    },
+    "publishConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "route": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "auth_required": {
+          "type": "boolean"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timeout": {
+          "$ref": "#/$defs/duration"
+        }
+      }
     }
   }
 }

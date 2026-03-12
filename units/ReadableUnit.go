@@ -11,21 +11,21 @@ import (
 	"strings"
 	"time"
 
-	core "github.com/ninenhan/go-workflow"
+	unit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
 // ReadableUnit outputs an io.Reader for chunked consumption.
 type ReadableUnit struct {
-	core.Unit
+	unit.Unit
 }
 
-var _ core.ExecutableUnit = (*ReadableUnit)(nil)
+var _ unit.ExecutableUnit = (*ReadableUnit)(nil)
 
 func (t *ReadableUnit) GetUnitName() string {
 	return reflect.TypeOf(ReadableUnit{}).Name()
 }
 
-func (t *ReadableUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
+func (t *ReadableUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
 	if self == nil || self.Input == nil {
 		return nil, errors.New("ReadableUnit: missing input")
 	}
@@ -33,14 +33,14 @@ func (t *ReadableUnit) Execute(ctx context.Context, state core.ContextMap, self 
 	if err != nil {
 		return nil, err
 	}
-	return &core.ExecutionResult{
+	return &unit.ExecutionResult{
 		NodeName: t.UnitName,
 		Data:     reader,
 		Stream:   true,
 	}, nil
 }
 
-func (t *ReadableUnit) GetUnitMeta() *core.Unit {
+func (t *ReadableUnit) GetUnitMeta() *unit.Unit {
 	return &t.Unit
 }
 
@@ -51,7 +51,7 @@ func NewReadableUnit() ReadableUnit {
 }
 
 func init() {
-	core.RegisterUnitFactory("ReadableUnit", func() core.ExecutableUnit {
+	unit.RegisterUnitFactory("ReadableUnit", func() unit.ExecutableUnit {
 		unit := &ReadableUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit

@@ -1,0 +1,32 @@
+{
+  "id": "wf-doc-demo",
+  "name": "doc demo",
+  "entry_nodes": ["n1"],
+  "publish_config": {
+    "enabled": true,
+    "route": "/api/doc-demo",
+    "method": "POST"
+  },
+  "triggers": [
+    {
+      "id": "incoming-hook",
+      "type": "http",
+      "enabled": true,
+      "config": {
+        "route": "/hooks/incoming",
+        "method": "POST"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "echo",
+      "executor": {
+        "type": "unit",
+        "ref": "LogUnit"
+      },
+      "input": "hello from go-workflow"
+    }
+  ]
+}

@@ -4,30 +4,30 @@ import (
 	"context"
 	"reflect"
 
-	core "github.com/ninenhan/go-workflow"
+	unit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
 type LogicUnit struct {
-	core.Unit
+	unit.Unit
 }
 
-var _ core.ExecutableUnit = (*LogicUnit)(nil)
+var _ unit.ExecutableUnit = (*LogicUnit)(nil)
 
 func (t *LogicUnit) GetUnitName() string {
 	return reflect.TypeOf(LogicUnit{}).Name()
 }
 
-func (t *LogicUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
+func (t *LogicUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
 	if self == nil || self.Input == nil {
-		return &core.ExecutionResult{NodeName: t.UnitName}, nil
+		return &unit.ExecutionResult{NodeName: t.UnitName}, nil
 	}
-	return &core.ExecutionResult{
+	return &unit.ExecutionResult{
 		NodeName: t.UnitName,
 		Data:     self.Input.Data,
 	}, nil
 }
 
-func (t *LogicUnit) GetUnitMeta() *core.Unit {
+func (t *LogicUnit) GetUnitMeta() *unit.Unit {
 	return &t.Unit
 }
 
@@ -38,11 +38,11 @@ func NewLogUnit() LogicUnit {
 }
 
 func init() {
-	factory := func() core.ExecutableUnit {
+	factory := func() unit.ExecutableUnit {
 		unit := &LogicUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit
 	}
-	core.RegisterUnitFactory("LogicUnit", factory)
-	core.RegisterUnitFactory("LogUnit", factory)
+	unit.RegisterUnitFactory("LogicUnit", factory)
+	unit.RegisterUnitFactory("LogUnit", factory)
 }

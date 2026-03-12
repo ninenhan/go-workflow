@@ -1,0 +1,40 @@
+{
+  "id": "wf-input-sources-demo",
+  "name": "input sources demo",
+  "entry_nodes": [
+    "summary"
+  ],
+  "nodes": [
+    {
+      "id": "summary",
+      "name": "summary",
+      "executor": {
+        "type": "unit",
+        "ref": "LogUnit"
+      },
+      "input_spec": {
+        "mode": "object",
+        "bindings": [
+          {
+            "source": "var",
+            "from": "tenant_id",
+            "as": "tenant_id",
+            "required": true
+          },
+          {
+            "source": "request",
+            "from": "body.message",
+            "as": "message",
+            "required": true
+          },
+          {
+            "source": "run",
+            "from": "workflow_id",
+            "as": "workflow_id",
+            "required": true
+          }
+        ]
+      }
+    }
+  ]
+}

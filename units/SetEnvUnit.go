@@ -6,20 +6,20 @@ import (
 	"errors"
 	"reflect"
 
-	core "github.com/ninenhan/go-workflow"
+	unit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
 type SetEnvUnit struct {
-	core.Unit
+	unit.Unit
 }
 
-var _ core.ExecutableUnit = (*SetEnvUnit)(nil)
+var _ unit.ExecutableUnit = (*SetEnvUnit)(nil)
 
 func (t *SetEnvUnit) GetUnitName() string {
 	return reflect.TypeOf(SetEnvUnit{}).Name()
 }
 
-func (t *SetEnvUnit) Execute(ctx context.Context, state core.ContextMap, self *core.Node) (*core.ExecutionResult, error) {
+func (t *SetEnvUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
 	if self == nil || self.Input == nil {
 		return nil, errors.New("SetEnvUnit: missing input")
 	}
@@ -31,13 +31,13 @@ func (t *SetEnvUnit) Execute(ctx context.Context, state core.ContextMap, self *c
 			return nil, errors.New("SetEnvUnit: invalid json")
 		}
 	}
-	return &core.ExecutionResult{
+	return &unit.ExecutionResult{
 		NodeName: t.UnitName,
 		Data:     mapData,
 	}, nil
 }
 
-func (t *SetEnvUnit) GetUnitMeta() *core.Unit {
+func (t *SetEnvUnit) GetUnitMeta() *unit.Unit {
 	return &t.Unit
 }
 
@@ -48,7 +48,7 @@ func NewSetEnvUnit() SetEnvUnit {
 }
 
 func init() {
-	core.RegisterUnitFactory("SetEnvUnit", func() core.ExecutableUnit {
+	unit.RegisterUnitFactory("SetEnvUnit", func() unit.ExecutableUnit {
 		unit := &SetEnvUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit
