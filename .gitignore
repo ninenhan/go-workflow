@@ -1,2 +1,5 @@
 .idea
 plugins/darwin-arm64
+.playwright-cli
+/.go-workflow-data/
+/dist/

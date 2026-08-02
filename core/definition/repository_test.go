@@ -39,3 +39,28 @@ func TestMemoryRepository_GetActiveVersion(t *testing.T) {
 		t.Fatalf("unexpected active version: %s", version.ID)
 	}
 }
+
+func TestMemoryRepository_CreateVersionAllocatesMonotonicVersions(t *testing.T) {
+	repo := NewMemoryRepository()
+	workflowDefinition := &WorkflowDefinition{ID: "ignored", Name: "versioned", Nodes: []Node{{
+		ID: "n1", Name: "log", Executor: ExecutorSpec{Type: ExecutorTypeUnit, Ref: "LogUnit"},
+	}}}
+
+	first, err := repo.CreateVersion(context.Background(), "wf-versioned", workflowDefinition)
+	if err != nil {
+		t.Fatalf("create first version: %v", err)
+	}
+	second, err := repo.CreateVersion(context.Background(), "wf-versioned", workflowDefinition)
+	if err != nil {
+		t.Fatalf("create second version: %v", err)
+	}
+	if first.ID != "wf-versioned:v1" || first.Version != 1 {
+		t.Fatalf("unexpected first version: %+v", first)
+	}
+	if second.ID != "wf-versioned:v2" || second.Version != 2 {
+		t.Fatalf("unexpected second version: %+v", second)
+	}
+	if first.Definition.ID != "wf-versioned" || workflowDefinition.ID != "ignored" {
+		t.Fatalf("definition id was not isolated: stored=%q source=%q", first.Definition.ID, workflowDefinition.ID)
+	}
+}

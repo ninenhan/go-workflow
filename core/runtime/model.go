@@ -2,9 +2,12 @@ package wfruntime
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
+
+var ErrRunNotFound = errors.New("run not found")
 
 type Status string
 
@@ -20,31 +23,36 @@ const (
 )
 
 type WorkflowRun struct {
-	ID                string              `json:"id"`
-	WorkflowID        string              `json:"workflow_id"`
-	WorkflowVersionID string              `json:"workflow_version_id"`
-	PlanID            string              `json:"plan_id"`
-	Status            Status              `json:"status"`
-	CurrentNodes      []string            `json:"current_nodes,omitempty"`
-	NodeRuns          map[string]*NodeRun `json:"node_runs,omitempty"`
-	Context           RunContext          `json:"context"`
-	CreatedAt         time.Time           `json:"created_at"`
-	UpdatedAt         time.Time           `json:"updated_at"`
-	StartedAt         time.Time           `json:"started_at,omitempty"`
-	FinishedAt        time.Time           `json:"finished_at,omitempty"`
-	mu                sync.RWMutex
+	ID                 string              `json:"id"`
+	WorkflowID         string              `json:"workflow_id"`
+	WorkflowVersionID  string              `json:"workflow_version_id"`
+	PlanID             string              `json:"plan_id"`
+	RequestFingerprint string              `json:"request_fingerprint,omitempty"`
+	CredentialScope    string              `json:"credential_scope,omitempty"`
+	Status             Status              `json:"status"`
+	CurrentNodes       []string            `json:"current_nodes,omitempty"`
+	NodeRuns           map[string]*NodeRun `json:"node_runs,omitempty"`
+	Context            RunContext          `json:"context"`
+	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
+	StartedAt          time.Time           `json:"started_at,omitempty"`
+	FinishedAt         time.Time           `json:"finished_at,omitempty"`
+	mu                 sync.RWMutex
 }
 
 type NodeRun struct {
-	NodeID      string         `json:"node_id"`
-	Status      Status         `json:"status"`
-	Attempt     int            `json:"attempt"`
-	MaxAttempts int            `json:"max_attempts,omitempty"`
-	StartedAt   time.Time      `json:"started_at,omitempty"`
-	FinishedAt  time.Time      `json:"finished_at,omitempty"`
-	Result      any            `json:"result,omitempty"`
-	Error       string         `json:"error,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	NodeID      string    `json:"node_id"`
+	Status      Status    `json:"status"`
+	Attempt     int       `json:"attempt"`
+	MaxAttempts int       `json:"max_attempts,omitempty"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
+	FinishedAt  time.Time `json:"finished_at,omitempty"`
+	// Input keeps the latest materialized task input so the UI can explain what
+	// a node actually received during execution instead of only showing config.
+	Input    any            `json:"input,omitempty"`
+	Result   any            `json:"result,omitempty"`
+	Error    string         `json:"error,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 type RunContext struct {

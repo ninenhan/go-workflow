@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 )
 
@@ -55,13 +56,15 @@ func (e *ControlSignalError) Error() string {
 }
 
 type ExecutionResult struct {
-	NodeName      string        `json:"node_name,omitempty"`
-	Data          any           `json:"data,omitempty"`
-	Stream        bool          `json:"stream,omitempty"`
-	Raw           any           `json:"raw,omitempty"`
-	Error         string        `json:"error,omitempty"`
-	Control       ControlSignal `json:"control,omitempty"`
-	ControlTarget string        `json:"control_target,omitempty"`
+	NodeName        string         `json:"node_name,omitempty"`
+	Data            any            `json:"data,omitempty"`
+	Variables       map[string]any `json:"variables,omitempty"`
+	DeleteVariables []string       `json:"delete_variables,omitempty"`
+	Stream          bool           `json:"stream,omitempty"`
+	Raw             any            `json:"raw,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	Control         ControlSignal  `json:"control,omitempty"`
+	ControlTarget   string         `json:"control_target,omitempty"`
 }
 
 func SimpleResult(data any) *ExecutionResult {
@@ -154,6 +157,7 @@ func (r *Registry) Names() []string {
 	for name := range r.factories {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 

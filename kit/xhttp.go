@@ -21,6 +21,16 @@ type XRequest struct {
 	Body    any                 `json:"body"`
 }
 
+// normalizeMethod keeps existing behavior for callers that never set a method
+// while allowing the request model to drive GET/PUT/DELETE and other verbs.
+func normalizeMethod(method string) string {
+	method = strings.TrimSpace(strings.ToUpper(method))
+	if method == "" {
+		return http.MethodPost
+	}
+	return method
+}
+
 // HandleStreamResponseUnTyped 处理流式响应
 func HandleStreamResponseUnTyped(ctx context.Context, resp *http.Response, isOpenAI bool, ch chan<- any) error {
 	defer func() {
@@ -91,20 +101,36 @@ func HandleNonStreamResponseUnTyped(ctx context.Context, resp *http.Response, is
 
 // HandlerHttpWithChannel HTTP 请求处理函数
 func HandlerHttpWithChannel(xRequest XRequest, isPreCooked bool, ch chan<- any) error {
-	// 序列化请求体
-	body, err := json.Marshal(xRequest.Body)
-	if err != nil {
-		return fmt.Errorf("序列化请求体失败: %v", err)
+	method := normalizeMethod(xRequest.Method)
+
+	var bodyReader io.Reader
+	if xRequest.Body != nil {
+		// Only marshal a body when the caller actually supplied one so GET-style
+		// requests can remain bodyless while POST/PUT/PATCH still send JSON.
+		body, err := json.Marshal(xRequest.Body)
+		if err != nil {
+			close(ch)
+			return fmt.Errorf("序列化请求体失败: %v", err)
+		}
+		bodyReader = bytes.NewBuffer(body)
 	}
+
 	// 创建 HTTP 请求
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, xRequest.Url, bytes.NewBuffer(body))
+	req, err := http.NewRequestWithContext(context.Background(), method, xRequest.Url, bodyReader)
 	if err != nil {
+		close(ch)
 		return fmt.Errorf("创建请求失败: %v", err)
 	}
 	// 设置请求头
-	req.Header.Set("Content-Type", "application/json")
+	if xRequest.Body != nil && req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	for key, values := range xRequest.Headers {
-		req.Header.Set(key, strings.Join(values, ","))
+		// Preserve multiple header values instead of collapsing them into a
+		// comma-joined string before the request is sent.
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
 	}
 	// 创建 HTTP 客户端并发送请求
 	client := &http.Client{
@@ -112,6 +138,7 @@ func HandlerHttpWithChannel(xRequest XRequest, isPreCooked bool, ch chan<- any) 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		close(ch)
 		return fmt.Errorf("发送请求失败: %v", err)
 	}
 	defer func(Body io.ReadCloser) {
@@ -124,6 +151,7 @@ func HandlerHttpWithChannel(xRequest XRequest, isPreCooked bool, ch chan<- any) 
 	// 检查响应状态码
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body) // 读取错误信息
+		close(ch)
 		return fmt.Errorf("请求失败，状态码: %d，响应: %s", resp.StatusCode, string(bodyBytes))
 	}
 	// 读取 Content-Type 确定响应类型

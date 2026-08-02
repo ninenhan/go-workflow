@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"reflect"
 	"strings"
 	"time"
 
+	"github.com/ninenhan/go-workflow/core/credential"
 	unit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
@@ -75,9 +75,9 @@ func (u *LLMUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit
 		return nil, errors.New("LLMUnit: params.model is required")
 	}
 
-	apiKey := os.Getenv(params.APIKeyEnv)
-	if strings.TrimSpace(apiKey) == "" {
-		return nil, fmt.Errorf("LLMUnit: env %s is empty", params.APIKeyEnv)
+	apiKey, err := credential.Resolve(ctx, params.APIKeyEnv)
+	if err != nil {
+		return nil, fmt.Errorf("LLMUnit: resolve credential %s: %w", params.APIKeyEnv, err)
 	}
 
 	prompt, err := normalizePrompt(self.Input.Data)

@@ -17,9 +17,16 @@
 - workflow/version 管理 API
 - run 查询、事件、快照
 - publish route / HTTP trigger
+- persistent time automations with structured schedules
+- strict OpenAPI-generated reusable service operations
 - pause / resume / cancel
 - 分支条件、节点级 loop、显式 back-edge
 - 内存 store 和 Gorm store
+
+Web 编辑器可以把 OpenAPI 3.0/3.1 JSON/YAML 中受支持的操作批量安装为可复用服务。普通用户
+只看到自动生成的选择项和运行表单；multipart 文件在每次运行时选择，不会保存到服务配置。
+源文档仅用于开发者导入与审查。支持边界、凭据规则和运行时安全校验见
+[`docs/openapi-operation-unit.md`](docs/openapi-operation-unit.md)。
 
 ## 架构
 
@@ -39,6 +46,31 @@ flowchart LR
 
 ```bash
 go get github.com/ninenhan/go-workflow
+```
+
+## V0 PC Web
+
+V0 可以把生产构建后的 Web、工作流 API、内嵌 worker、SQLite 状态和加密凭据存储运行在
+同一个进程中。前后端仓库位于相邻目录时，从本仓库执行：
+
+```bash
+./scripts/run-v0.sh
+```
+
+然后打开 `http://127.0.0.1:55080/`。脚本严格使用前端锁文件安装依赖并重新构建，不会使用
+旧的 `dist` 或退回 Vite 开发代理。非相邻目录、运行数据、监听地址以及完整发布检查见
+[`docs/v0-desktop.md`](docs/v0-desktop.md)。
+
+生成无需开发工具链的当前平台发布包：
+
+```bash
+./scripts/build-v0-release.sh
+```
+
+一次生成 macOS Apple Silicon、Windows x64 和 Linux x64 桌面包：
+
+```bash
+./scripts/build-v0-desktop-releases.sh
 ```
 
 ## 最小可运行示例
@@ -205,11 +237,30 @@ go func() {
 
 ## HTTP API
 
+运行凭据使用独立的作用域存储，只在 worker 的执行上下文中解析。内置服务默认以
+AES-256-GCM 加密并原子写入 `.go-workflow-data`，进程重启后仍可使用；密钥、密文或权限
+异常时会拒绝启动而不会退回明文或内存存储。凭据值不会进入工作流定义、任务协议、运行结果
+或列表响应。管理 API、作用域约束和远程 resolver 扩展方式见
+[`docs/credentials.md`](docs/credentials.md)。
+
 scheduler 自带 HTTP 控制面：
+
+本地开发可以直接启动带嵌入式 worker 和内置 Units 的服务；默认地址与 Web 编辑器代理一致：
+
+```bash
+go run ./cmd/workflow-server
+```
+
+发布工作流、版本、运行状态、快照和事件默认持久化到
+`.go-workflow-data/workflow.db`。通过 `WORKFLOW_ADDR` 可以覆盖监听地址，通过
+`WORKFLOW_DATA_DIR` 可以移动整个运行数据目录。
 
 - `POST /v1/workflows`
 - `GET /v1/workflows`
+- `GET /v1/automations`
 - `POST /v1/workflows/{workflow_id}/versions`
+- `GET /v1/workflows/{workflow_id}/contract`
+- `POST /v1/workflows/{workflow_id}/invoke`
 - `POST /v1/workflow-versions/{version_id}/publish`
 - `POST /v1/workflow-versions/{version_id}/runs`
 - `GET /v1/runs`
@@ -220,6 +271,11 @@ scheduler 自带 HTTP 控制面：
 - `POST /v1/runs/{id}/resume`
 - `POST /v1/runs/{id}/cancel`
 - `GET /v1/workers`
+
+Time automations support daily, weekdays, selected weekdays, and fixed interval
+schedules. They become active only after publication and persist across process
+restarts. Configuration and recovery semantics are documented in
+[`docs/automations.md`](docs/automations.md).
 - `POST /v1/workers/register`
 - `POST /v1/workers/heartbeat`
 
@@ -259,7 +315,10 @@ curl -X POST http://127.0.0.1:8080/v1/workflows/wf-doc-demo/versions \
         "publish_config": {
           "enabled": true,
           "route": "/api/doc-demo",
-          "method": "POST"
+          "method": "POST",
+          "input_mode": "body",
+          "response_mode": "run",
+          "timeout": 10000
         },
         "nodes": [
           {
@@ -380,6 +439,51 @@ curl -X POST http://127.0.0.1:8080/api/doc-demo \
   }
 }
 ```
+
+## 参数文本模板
+
+`param_templates` 用于把固定文本与多个运行时绑定组合成一个字符串参数。它是结构化模型，不需要在普通参数中嵌入表达式：
+
+```json
+{
+  "params": {
+    "method": "GET"
+  },
+  "param_templates": {
+    "url": {
+      "segments": [
+        { "type": "text", "value": "https://api.example.com/search?q=" },
+        {
+          "type": "binding",
+          "binding": {
+            "source": "node",
+            "from": "summary",
+            "path": "text",
+            "required": true
+          }
+        },
+        { "type": "text", "value": "&owner=" },
+        {
+          "type": "binding",
+          "binding": {
+            "source": "var",
+            "from": "owner",
+            "required": true
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+规则：
+
+1. 同一个参数键不能同时出现在 `param_bindings` 和 `param_templates`。
+2. `binding` 片段使用与 `input_spec` 相同的来源、路径、必填、默认值和变换规则。
+3. `source=node` 仍必须引用当前节点的直接依赖，编译器会拒绝隐式跨图读取。
+4. 字符串保持原值，数字和布尔值使用稳定文本表示，对象与数组编码为 JSON。
+5. 模板片段按声明顺序解析；任一必填绑定缺失时，节点不会执行。
 
 ## 文档
 

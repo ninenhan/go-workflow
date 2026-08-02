@@ -6,17 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"strings"
-	"time"
+	"text/template"
 
 	unit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
-// ReadableUnit outputs an io.Reader for chunked consumption.
+// ReadableUnit renders workflow data into JSON-safe text.
 type ReadableUnit struct {
 	unit.Unit
+	Format   string `json:"format,omitempty"`
+	Template string `json:"template,omitempty"`
 }
 
 var _ unit.ExecutableUnit = (*ReadableUnit)(nil)
@@ -29,15 +30,85 @@ func (t *ReadableUnit) Execute(ctx context.Context, state unit.ContextMap, self 
 	if self == nil || self.Input == nil {
 		return nil, errors.New("ReadableUnit: missing input")
 	}
-	reader, err := toReader(ctx, self.Input.Data)
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("ReadableUnit: %w", err)
+	}
+
+	format := strings.ToLower(strings.TrimSpace(t.Format))
+	if format == "" {
+		format = "text"
+	}
+	if format != "text" && format != "json" {
+		return nil, fmt.Errorf("ReadableUnit: unsupported format %q", t.Format)
+	}
+	if format == "json" && strings.TrimSpace(t.Template) != "" {
+		return nil, errors.New("ReadableUnit: template is only supported for text format")
+	}
+
+	var (
+		rendered string
+		err      error
+	)
+	if strings.TrimSpace(t.Template) != "" {
+		rendered, err = renderReadableTemplate(t.Template, self.Input.Data)
+	} else if format == "json" {
+		rendered, err = marshalReadableJSON(self.Input.Data)
+	} else {
+		rendered, err = renderReadableText(self.Input.Data)
+	}
 	if err != nil {
 		return nil, err
 	}
 	return &unit.ExecutionResult{
 		NodeName: t.UnitName,
-		Data:     reader,
-		Stream:   true,
+		Data:     rendered,
 	}, nil
+}
+
+func renderReadableTemplate(source string, input any) (string, error) {
+	compiled, err := template.New("content").Option("missingkey=error").Parse(source)
+	if err != nil {
+		return "", fmt.Errorf("ReadableUnit: parse template: %w", err)
+	}
+	var rendered bytes.Buffer
+	if err := compiled.Execute(&rendered, input); err != nil {
+		return "", fmt.Errorf("ReadableUnit: render template: %w", err)
+	}
+	return rendered.String(), nil
+}
+
+func renderReadableText(input any) (string, error) {
+	switch value := input.(type) {
+	case string:
+		return value, nil
+	case []byte:
+		return string(value), nil
+	case json.RawMessage:
+		if !json.Valid(value) {
+			return "", errors.New("ReadableUnit: input contains invalid JSON")
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, value); err != nil {
+			return "", fmt.Errorf("ReadableUnit: compact JSON: %w", err)
+		}
+		return compact.String(), nil
+	case nil:
+		return "null", nil
+	case bool:
+		return fmt.Sprint(value), nil
+	case float32, float64, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprint(value), nil
+	default:
+		return marshalReadableJSON(value)
+	}
+}
+
+func marshalReadableJSON(input any) (string, error) {
+	encoded, err := json.MarshalIndent(input, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("ReadableUnit: encode JSON: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func (t *ReadableUnit) GetUnitMeta() *unit.Unit {
@@ -45,113 +116,15 @@ func (t *ReadableUnit) GetUnitMeta() *unit.Unit {
 }
 
 func NewReadableUnit() ReadableUnit {
-	unit := ReadableUnit{}
-	unit.UnitName = unit.GetUnitName()
-	return unit
+	action := ReadableUnit{Format: "text"}
+	action.UnitName = action.GetUnitName()
+	return action
 }
 
 func init() {
 	unit.RegisterUnitFactory("ReadableUnit", func() unit.ExecutableUnit {
-		unit := &ReadableUnit{}
-		unit.UnitName = unit.GetUnitName()
-		return unit
+		action := &ReadableUnit{Format: "text"}
+		action.UnitName = action.GetUnitName()
+		return action
 	})
-}
-
-func toReader(ctx context.Context, data any) (io.Reader, error) {
-	switch v := data.(type) {
-	case io.Reader:
-		return v, nil
-	case []byte:
-		return bytes.NewReader(v), nil
-	case string:
-		return strings.NewReader(v), nil
-	case []string:
-		return streamFromSlices(ctx, v), nil
-	case []any:
-		strs := make([]string, 0, len(v))
-		for _, it := range v {
-			strs = append(strs, fmt.Sprint(it))
-		}
-		return streamFromSlices(ctx, strs), nil
-	case map[string]any:
-		buf, err := json.Marshal(v)
-		if err != nil {
-			return nil, err
-		}
-		return bytes.NewReader(buf), nil
-	case <-chan []byte:
-		return streamFromChanBytes(ctx, v), nil
-	case chan []byte:
-		return streamFromChanBytes(ctx, v), nil
-	case <-chan string:
-		return streamFromChanString(ctx, v), nil
-	case chan string:
-		return streamFromChanString(ctx, v), nil
-	default:
-		// best-effort string conversion
-		return strings.NewReader(fmt.Sprint(v)), nil
-	}
-}
-
-func streamFromSlices(ctx context.Context, chunks []string) io.Reader {
-	pr, pw := io.Pipe()
-	go func() {
-		defer func() { _ = pw.Close() }()
-		for _, s := range chunks {
-			select {
-			case <-ctx.Done():
-				_ = pw.CloseWithError(ctx.Err())
-				return
-			default:
-			}
-			_, _ = io.WriteString(pw, s)
-			time.Sleep(0) // yield
-		}
-	}()
-	return pr
-}
-
-func streamFromChanBytes(ctx context.Context, ch <-chan []byte) io.Reader {
-	pr, pw := io.Pipe()
-	go func() {
-		defer func() { _ = pw.Close() }()
-		for {
-			select {
-			case <-ctx.Done():
-				_ = pw.CloseWithError(ctx.Err())
-				return
-			case b, ok := <-ch:
-				if !ok {
-					return
-				}
-				if len(b) > 0 {
-					_, _ = pw.Write(b)
-				}
-			}
-		}
-	}()
-	return pr
-}
-
-func streamFromChanString(ctx context.Context, ch <-chan string) io.Reader {
-	pr, pw := io.Pipe()
-	go func() {
-		defer func() { _ = pw.Close() }()
-		for {
-			select {
-			case <-ctx.Done():
-				_ = pw.CloseWithError(ctx.Err())
-				return
-			case s, ok := <-ch:
-				if !ok {
-					return
-				}
-				if s != "" {
-					_, _ = io.WriteString(pw, s)
-				}
-			}
-		}
-	}()
-	return pr
 }

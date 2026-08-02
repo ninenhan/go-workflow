@@ -14,6 +14,7 @@ type Repository interface {
 	SaveWorkflow(ctx context.Context, workflow *Workflow) error
 	GetWorkflow(ctx context.Context, workflowID string) (*Workflow, error)
 	ListWorkflows(ctx context.Context) ([]*Workflow, error)
+	CreateVersion(ctx context.Context, workflowID string, definition *WorkflowDefinition) (*WorkflowVersion, error)
 	SaveVersion(ctx context.Context, version *WorkflowVersion) error
 	GetVersion(ctx context.Context, versionID string) (*WorkflowVersion, error)
 	ListVersions(ctx context.Context, workflowID string) ([]*WorkflowVersion, error)
@@ -78,6 +79,56 @@ func (r *MemoryRepository) ListWorkflows(_ context.Context) ([]*Workflow, error)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+func (r *MemoryRepository) CreateVersion(_ context.Context, workflowID string, definition *WorkflowDefinition) (*WorkflowVersion, error) {
+	if workflowID == "" {
+		return nil, errors.New("workflow id is required")
+	}
+	if definition == nil {
+		return nil, errors.New("workflow definition is required")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	nextVersion := 1
+	for _, id := range r.byFlow[workflowID] {
+		if version := r.versions[id]; version != nil && version.Version >= nextVersion {
+			nextVersion = version.Version + 1
+		}
+	}
+	versionID := fmt.Sprintf("%s:v%d", workflowID, nextVersion)
+	for r.versions[versionID] != nil {
+		nextVersion++
+		versionID = fmt.Sprintf("%s:v%d", workflowID, nextVersion)
+	}
+
+	now := time.Now()
+	definitionCopy := cloneDefinition(definition)
+	definitionCopy.ID = workflowID
+	version := &WorkflowVersion{
+		ID:         versionID,
+		WorkflowID: workflowID,
+		Version:    nextVersion,
+		Status:     VersionDraft,
+		Definition: definitionCopy,
+		CreatedAt:  now,
+	}
+	r.versions[versionID] = cloneVersion(version)
+	r.byFlow[workflowID] = appendUniqueVersionID(r.byFlow[workflowID], versionID)
+	if workflow := r.workflows[workflowID]; workflow == nil {
+		r.workflows[workflowID] = &Workflow{
+			ID:          workflowID,
+			Name:        definitionCopy.Name,
+			Description: definitionCopy.Description,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+	} else {
+		workflow.UpdatedAt = now
+	}
+	return cloneVersion(version), nil
 }
 
 func (r *MemoryRepository) SaveVersion(_ context.Context, version *WorkflowVersion) error {

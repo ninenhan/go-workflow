@@ -6,18 +6,24 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ninenhan/go-workflow/core/credential"
 	"github.com/ninenhan/go-workflow/core/executor"
 )
 
 type Executor struct {
-	Registry *Registry
+	Registry    *Registry
+	Credentials credential.Resolver
 }
 
 func NewExecutor(reg *Registry) *Executor {
+	return NewExecutorWithCredentials(reg, credential.EnvironmentResolver{})
+}
+
+func NewExecutorWithCredentials(reg *Registry, credentials credential.Resolver) *Executor {
 	if reg == nil {
 		reg = DefaultRegistry
 	}
-	return &Executor{Registry: reg}
+	return &Executor{Registry: reg, Credentials: credentials}
 }
 
 func (e *Executor) Type() executor.Type {
@@ -40,13 +46,31 @@ func (e *Executor) Execute(ctx context.Context, task executor.ExecuteTask) (exec
 	if err := hydrate(execImpl, task.Params); err != nil {
 		return executor.ExecuteResult{}, fmt.Errorf("hydrate unit %s: %w", unitName, err)
 	}
+	if e.Credentials == nil {
+		return executor.ExecuteResult{}, fmt.Errorf("unit credential resolver is not configured")
+	}
+	executionContext, err := credential.WithResolver(ctx, e.Credentials, task.CredentialScope)
+	if err != nil {
+		return executor.ExecuteResult{}, fmt.Errorf("prepare unit credentials: %w", err)
+	}
 
-	res, err := execImpl.Execute(ctx, buildContext(task.Context), &Node{
+	res, err := execImpl.Execute(executionContext, buildContext(task.Context), &Node{
 		ID:     task.NodeID,
 		Input:  &Input{Data: task.Input},
 		Params: cloneParams(task.Params),
 	})
 	if err != nil {
+		if retryable, retryAfter, classified := executor.ClassifyFailure(err); classified {
+			status := executor.StatusFailed
+			if retryable {
+				status = executor.StatusRetryable
+			}
+			return executor.ExecuteResult{
+				Status:     status,
+				Error:      err.Error(),
+				RetryAfter: retryAfter,
+			}, nil
+		}
 		return executor.ExecuteResult{}, err
 	}
 	if res == nil {
@@ -67,9 +91,11 @@ func (e *Executor) Execute(ctx context.Context, task executor.ExecuteTask) (exec
 	}
 
 	return executor.ExecuteResult{
-		Status:   executor.StatusSucceeded,
-		Output:   res.Data,
-		Metadata: metadata,
+		Status:          executor.StatusSucceeded,
+		Output:          res.Data,
+		Variables:       cloneParams(res.Variables),
+		DeleteVariables: append([]string(nil), res.DeleteVariables...),
+		Metadata:        metadata,
 	}, nil
 }
 

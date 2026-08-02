@@ -36,7 +36,7 @@ func (s *MemoryStore) LoadRun(_ context.Context, runID string) (*WorkflowRun, er
 	run := s.runs[runID]
 	s.mu.RUnlock()
 	if run == nil {
-		return nil, errors.New("run not found")
+		return nil, ErrRunNotFound
 	}
 	return run.Clone(), nil
 }

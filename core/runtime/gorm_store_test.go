@@ -21,12 +21,14 @@ func TestGormStore_RunSnapshotEventLifecycle(t *testing.T) {
 
 	now := time.Date(2026, 3, 12, 13, 0, 0, 0, time.UTC)
 	run := &WorkflowRun{
-		ID:                "run-1",
-		WorkflowID:        "wf-1",
-		WorkflowVersionID: "wf-1:v1",
-		PlanID:            "plan-1",
-		Status:            StatusRunning,
-		CurrentNodes:      []string{"n1"},
+		ID:                 "run-1",
+		WorkflowID:         "wf-1",
+		WorkflowVersionID:  "wf-1:v1",
+		PlanID:             "plan-1",
+		RequestFingerprint: "request-fingerprint-1",
+		CredentialScope:    "workspace-1",
+		Status:             StatusRunning,
+		CurrentNodes:       []string{"n1"},
 		NodeRuns: map[string]*NodeRun{
 			"n1": {
 				NodeID:      "n1",
@@ -88,6 +90,12 @@ func TestGormStore_RunSnapshotEventLifecycle(t *testing.T) {
 	}
 	if loaded.Status != StatusSuccess {
 		t.Fatalf("unexpected run status: %s", loaded.Status)
+	}
+	if loaded.CredentialScope != "workspace-1" {
+		t.Fatalf("credential scope = %q", loaded.CredentialScope)
+	}
+	if loaded.RequestFingerprint != "request-fingerprint-1" {
+		t.Fatalf("request fingerprint = %q", loaded.RequestFingerprint)
 	}
 	if loaded.NodeRuns["n1"] == nil || loaded.NodeRuns["n1"].Status != StatusSuccess {
 		t.Fatalf("unexpected node run: %+v", loaded.NodeRuns["n1"])

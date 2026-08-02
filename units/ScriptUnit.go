@@ -2,6 +2,7 @@ package units
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -13,7 +14,8 @@ import (
 // ScriptUnit ===== ScriptUnit 动态 JS 执行单元 =====
 type ScriptUnit struct {
 	unit.Unit
-	Script string `json:"script"` // JavaScript 脚本代码
+	Language string `json:"language,omitempty"`
+	Script   string `json:"script"`
 }
 
 var _ unit.ExecutableUnit = (*ScriptUnit)(nil)
@@ -23,23 +25,61 @@ func (t *ScriptUnit) GetUnitName() string {
 }
 
 func (t *ScriptUnit) Execute(ctx context.Context, state unit.ContextMap, self *unit.Node) (*unit.ExecutionResult, error) {
+	if self == nil {
+		return nil, errors.New("ScriptUnit: missing node")
+	}
+	language := strings.ToLower(strings.TrimSpace(t.Language))
+	if language == "" {
+		language = "javascript"
+	}
+	if language != "javascript" {
+		return nil, fmt.Errorf("ScriptUnit: unsupported language %q", t.Language)
+	}
+	if strings.TrimSpace(t.Script) == "" {
+		return nil, errors.New("ScriptUnit: params.script is required")
+	}
+
 	vm := goja.New()
-	// 注入上下文变量
+	input := any(nil)
+	if self.Input != nil {
+		input = self.Input.Data
+	}
+	if err := vm.Set("input", input); err != nil {
+		return nil, fmt.Errorf("ScriptUnit: expose input: %w", err)
+	}
+	if err := vm.Set("$input", input); err != nil {
+		return nil, fmt.Errorf("ScriptUnit: expose $input: %w", err)
+	}
 	for k, v := range state {
 		if v == nil {
 			continue
 		}
-		_ = vm.Set("$"+k, v.Data)
+		if err := vm.Set("$"+k, v.Data); err != nil {
+			return nil, fmt.Errorf("ScriptUnit: expose workflow value %q: %w", k, err)
+		}
 	}
+
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			vm.Interrupt(ctx.Err())
+		case <-finished:
+		}
+	}()
 	defaultValue, err := vm.RunString(t.Script)
+	close(finished)
 	if err != nil {
-		return nil, fmt.Errorf("ScriptUnit 执行失败: %w", err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("ScriptUnit: execution interrupted: %w", ctxErr)
+		}
+		return nil, fmt.Errorf("ScriptUnit: execute JavaScript: %w", err)
 	}
-	// 自动收集全局变量
+
 	result := make(map[string]any)
 	global := vm.GlobalObject()
 	keys := global.Keys()
-	result["$$"] = defaultValue
+	result["$$"] = defaultValue.Export()
 	for _, key := range keys {
 		if strings.HasPrefix(key, "$$") {
 			val := vm.Get(key)
@@ -59,7 +99,8 @@ func (t *ScriptUnit) GetUnitMeta() *unit.Unit {
 
 func NewScriptUnit(script string) ScriptUnit {
 	unit := ScriptUnit{
-		Script: script,
+		Language: "javascript",
+		Script:   script,
 	}
 	unit.UnitName = unit.GetUnitName()
 	return unit
@@ -67,7 +108,7 @@ func NewScriptUnit(script string) ScriptUnit {
 
 func init() {
 	unit.RegisterUnitFactory("ScriptUnit", func() unit.ExecutableUnit {
-		unit := &ScriptUnit{}
+		unit := &ScriptUnit{Language: "javascript"}
 		unit.UnitName = unit.GetUnitName()
 		return unit
 	})

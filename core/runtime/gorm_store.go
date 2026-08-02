@@ -16,19 +16,23 @@ type GormStore struct {
 	db *gorm.DB
 }
 
+const InterruptedRunMessage = "server restarted before the run completed"
+
 type workflowRunRecord struct {
-	ID                string         `gorm:"primaryKey;type:varchar(64)"`
-	WorkflowID        string         `gorm:"index;type:varchar(128);not null"`
-	WorkflowVersionID string         `gorm:"index;type:varchar(128);not null"`
-	PlanID            string         `gorm:"type:varchar(128);not null"`
-	Status            string         `gorm:"index;type:varchar(32);not null"`
-	CurrentNodes      datatypes.JSON `gorm:"type:json"`
-	NodeRuns          datatypes.JSON `gorm:"type:json"`
-	Context           datatypes.JSON `gorm:"type:json"`
-	CreatedAt         time.Time      `gorm:"index"`
-	UpdatedAt         time.Time      `gorm:"index"`
-	StartedAt         *time.Time
-	FinishedAt        *time.Time
+	ID                 string         `gorm:"primaryKey;type:varchar(64)"`
+	WorkflowID         string         `gorm:"index;type:varchar(128);not null"`
+	WorkflowVersionID  string         `gorm:"index;type:varchar(128);not null"`
+	PlanID             string         `gorm:"type:varchar(128);not null"`
+	RequestFingerprint string         `gorm:"type:varchar(128)"`
+	CredentialScope    string         `gorm:"type:varchar(128)"`
+	Status             string         `gorm:"index;type:varchar(32);not null"`
+	CurrentNodes       datatypes.JSON `gorm:"type:json"`
+	NodeRuns           datatypes.JSON `gorm:"type:json"`
+	Context            datatypes.JSON `gorm:"type:json"`
+	CreatedAt          time.Time      `gorm:"index"`
+	UpdatedAt          time.Time      `gorm:"index"`
+	StartedAt          *time.Time
+	FinishedAt         *time.Time
 }
 
 func (workflowRunRecord) TableName() string { return "workflow_runs" }
@@ -93,7 +97,7 @@ func (s *GormStore) LoadRun(ctx context.Context, runID string) (*WorkflowRun, er
 	var record workflowRunRecord
 	if err := s.db.WithContext(ctx).First(&record, "id = ?", runID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("run not found")
+			return nil, ErrRunNotFound
 		}
 		return nil, err
 	}
@@ -182,15 +186,91 @@ func (s *GormStore) Events(ctx context.Context, runID string) ([]RunEvent, error
 	return out, nil
 }
 
+func (s *GormStore) FailInterruptedRuns(ctx context.Context) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, errors.New("gorm store is not configured")
+	}
+	recovered := 0
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var records []workflowRunRecord
+		activeStatuses := []string{
+			string(StatusPending),
+			string(StatusRunning),
+			string(StatusRetry),
+			string(StatusPaused),
+		}
+		if err := tx.Where("status IN ?", activeStatuses).Order("id asc").Find(&records).Error; err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		for _, record := range records {
+			run, err := unmarshalRun(record)
+			if err != nil {
+				return err
+			}
+			for _, node := range run.NodeRuns {
+				if node == nil {
+					continue
+				}
+				switch node.Status {
+				case StatusRunning, StatusRetry, StatusPaused:
+					node.Status = StatusFailed
+					node.Error = InterruptedRunMessage
+					node.FinishedAt = now
+				case StatusPending:
+					node.Status = StatusCancelled
+					node.FinishedAt = now
+				}
+			}
+			run.Status = StatusFailed
+			run.CurrentNodes = nil
+			run.UpdatedAt = now
+			run.FinishedAt = now
+			updated, err := marshalRun(run)
+			if err != nil {
+				return err
+			}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "id"}},
+				UpdateAll: true,
+			}).Create(updated).Error; err != nil {
+				return err
+			}
+			event, err := marshalEvent(RunEvent{
+				RunID:      run.ID,
+				WorkflowID: run.WorkflowID,
+				Type:       EventRunFinished,
+				Status:     StatusFailed,
+				Time:       now,
+				Message:    InterruptedRunMessage,
+			})
+			if err != nil {
+				return err
+			}
+			if err := tx.Create(event).Error; err != nil {
+				return err
+			}
+			recovered++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("fail interrupted workflow runs: %w", err)
+	}
+	return recovered, nil
+}
+
 func marshalRun(run *WorkflowRun) (*workflowRunRecord, error) {
 	record := &workflowRunRecord{
-		ID:                run.ID,
-		WorkflowID:        run.WorkflowID,
-		WorkflowVersionID: run.WorkflowVersionID,
-		PlanID:            run.PlanID,
-		Status:            string(run.Status),
-		CreatedAt:         run.CreatedAt,
-		UpdatedAt:         run.UpdatedAt,
+		ID:                 run.ID,
+		WorkflowID:         run.WorkflowID,
+		WorkflowVersionID:  run.WorkflowVersionID,
+		PlanID:             run.PlanID,
+		RequestFingerprint: run.RequestFingerprint,
+		CredentialScope:    run.CredentialScope,
+		Status:             string(run.Status),
+		CreatedAt:          run.CreatedAt,
+		UpdatedAt:          run.UpdatedAt,
 	}
 	if !run.StartedAt.IsZero() {
 		startedAt := run.StartedAt
@@ -215,13 +295,15 @@ func marshalRun(run *WorkflowRun) (*workflowRunRecord, error) {
 
 func unmarshalRun(record workflowRunRecord) (*WorkflowRun, error) {
 	run := &WorkflowRun{
-		ID:                record.ID,
-		WorkflowID:        record.WorkflowID,
-		WorkflowVersionID: record.WorkflowVersionID,
-		PlanID:            record.PlanID,
-		Status:            Status(record.Status),
-		CreatedAt:         record.CreatedAt,
-		UpdatedAt:         record.UpdatedAt,
+		ID:                 record.ID,
+		WorkflowID:         record.WorkflowID,
+		WorkflowVersionID:  record.WorkflowVersionID,
+		PlanID:             record.PlanID,
+		RequestFingerprint: record.RequestFingerprint,
+		CredentialScope:    record.CredentialScope,
+		Status:             Status(record.Status),
+		CreatedAt:          record.CreatedAt,
+		UpdatedAt:          record.UpdatedAt,
 	}
 	if record.StartedAt != nil {
 		run.StartedAt = *record.StartedAt

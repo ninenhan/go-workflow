@@ -2,8 +2,10 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strconv"
@@ -27,6 +29,15 @@ type DefaultScheduler struct {
 	RunController      RunController
 }
 
+const (
+	eachLoopItemCountMetadataKey  = "_each_item_count"
+	eachLoopOutputsMetadataKey    = "_each_outputs"
+	loopGroupItemCountMetadataKey = "_loop_group_item_count"
+	loopGroupOutputsMetadataKey   = "_loop_group_outputs"
+	loopGroupIterationMetadataKey = "_loop_group_iteration"
+	resolvedLoopCountMetadataKey  = "_resolved_loop_count"
+)
+
 func NewDefaultScheduler(executors *executor.Registry, store wfruntime.Store) *DefaultScheduler {
 	execDispatcher := executor.NewRegistryDispatcher(executors)
 	return &DefaultScheduler{
@@ -36,6 +47,62 @@ func NewDefaultScheduler(executors *executor.Registry, store wfruntime.Store) *D
 		ResultReporter:     &NopResultReporter{},
 		HeartbeatReporter:  &NopHeartbeatReporter{},
 	}
+}
+
+// PrepareRun materializes the stable runtime identity and pending node records
+// before execution starts. Async callers can persist this state and return the
+// run ID without racing the scheduler goroutine.
+func PrepareRun(plan *planning.ExecutionPlan, run *wfruntime.WorkflowRun) *wfruntime.WorkflowRun {
+	if run == nil {
+		run = wfruntime.NewWorkflowRun(NewRunID(), plan.WorkflowID, plan.WorkflowVersionID, plan.PlanID)
+	} else {
+		if run.ID == "" {
+			run.ID = NewRunID()
+		}
+		if run.WorkflowID == "" {
+			run.WorkflowID = plan.WorkflowID
+		}
+		if run.WorkflowVersionID == "" {
+			run.WorkflowVersionID = plan.WorkflowVersionID
+		}
+		if run.PlanID == "" {
+			run.PlanID = plan.PlanID
+		}
+		if run.Context.Variables == nil {
+			run.Context.Variables = map[string]any{}
+		}
+		if run.Context.NodeResults == nil {
+			run.Context.NodeResults = map[string]any{}
+		}
+		if run.Status == "" {
+			run.Status = wfruntime.StatusPending
+		}
+		now := time.Now()
+		if run.CreatedAt.IsZero() {
+			run.CreatedAt = now
+		}
+		if run.UpdatedAt.IsZero() {
+			run.UpdatedAt = now
+		}
+	}
+	if run.NodeRuns == nil {
+		run.NodeRuns = make(map[string]*wfruntime.NodeRun, len(plan.Nodes))
+	}
+	for id, node := range plan.Nodes {
+		if run.NodeRuns[id] != nil {
+			continue
+		}
+		maxAttempts := node.Retry.MaxAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = 1
+		}
+		run.NodeRuns[id] = &wfruntime.NodeRun{
+			NodeID:      id,
+			Status:      wfruntime.StatusPending,
+			MaxAttempts: maxAttempts,
+		}
+	}
+	return run
 }
 
 func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan, run *wfruntime.WorkflowRun) (*wfruntime.WorkflowRun, error) {
@@ -58,45 +125,7 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 		s.HeartbeatReporter = &NopHeartbeatReporter{}
 	}
 
-	if run == nil {
-		run = wfruntime.NewWorkflowRun(newRunID(), plan.WorkflowID, plan.WorkflowVersionID, plan.PlanID)
-	} else {
-		if run.ID == "" {
-			run.ID = newRunID()
-		}
-		if run.WorkflowID == "" {
-			run.WorkflowID = plan.WorkflowID
-		}
-		if run.WorkflowVersionID == "" {
-			run.WorkflowVersionID = plan.WorkflowVersionID
-		}
-		if run.PlanID == "" {
-			run.PlanID = plan.PlanID
-		}
-		if run.Context.Variables == nil {
-			run.Context.Variables = map[string]any{}
-		}
-		if run.Context.NodeResults == nil {
-			run.Context.NodeResults = map[string]any{}
-		}
-	}
-	if run.NodeRuns == nil {
-		run.NodeRuns = make(map[string]*wfruntime.NodeRun, len(plan.Nodes))
-	}
-	for id, node := range plan.Nodes {
-		if run.NodeRuns[id] == nil {
-			maxAttempts := node.Retry.MaxAttempts
-			if maxAttempts <= 0 {
-				maxAttempts = 1
-			}
-			run.NodeRuns[id] = &wfruntime.NodeRun{
-				NodeID:      id,
-				Status:      wfruntime.StatusPending,
-				Attempt:     0,
-				MaxAttempts: maxAttempts,
-			}
-		}
-	}
+	run = PrepareRun(plan, run)
 
 	now := time.Now()
 	run.Status = wfruntime.StatusRunning
@@ -111,13 +140,9 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 		if stopped := s.applyRunCommand(ctx, run); stopped {
 			return run, nil
 		}
-		if ctx.Err() != nil {
-			run.Status = wfruntime.StatusCancelled
-			run.UpdatedAt = time.Now()
-			run.FinishedAt = run.UpdatedAt
-			s.saveRun(ctx, run)
-			s.emit(ctx, run, wfruntime.EventRunFinished, "", run.Status, ctx.Err().Error())
-			return run, ctx.Err()
+		if err := ctx.Err(); err != nil {
+			s.cancelRun(context.WithoutCancel(ctx), run, err)
+			return run, err
 		}
 
 		ready := s.NodeDispatcher.Dispatch(plan, run)
@@ -128,6 +153,7 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 			if allNodesTerminal(run) {
 				run.FinishedAt = time.Now()
 				run.UpdatedAt = run.FinishedAt
+				run.CurrentNodes = nil
 				if hasNodeFailed(run) {
 					run.Status = wfruntime.StatusFailed
 				} else {
@@ -141,6 +167,7 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 			blocked := firstBlockedNode(run)
 			err := fmt.Errorf("no runnable nodes, blocked on unresolved dependencies: %s", blocked)
 			run.Status = wfruntime.StatusFailed
+			run.CurrentNodes = nil
 			run.UpdatedAt = time.Now()
 			run.FinishedAt = run.UpdatedAt
 			s.saveRun(ctx, run)
@@ -159,11 +186,36 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 			s.saveRun(ctx, run)
 			s.emit(ctx, run, wfruntime.EventNodeRunning, nodeID, nodeRun.Status, "")
 
-			task, err := buildExecuteTask(run, plan, nodePlan, nodeRun)
+			task, emptyEach, err := buildExecuteTask(run, plan, nodePlan, nodeRun)
 			if err != nil {
 				s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
 				continue
 			}
+			if emptyEach {
+				if completed, completeErr := s.completeEmptyLoopGroup(ctx, plan, run, nodeID, task.Input); completeErr != nil {
+					s.handleNodeError(ctx, run, nodePlan, nodeRun, completeErr)
+					continue
+				} else if completed {
+					continue
+				}
+				nodeRun.Input = task.Input
+				nodeRun.Status = wfruntime.StatusSuccess
+				nodeRun.Error = ""
+				nodeRun.Result = []any{}
+				nodeRun.Metadata = mergeMap(nodeRun.Metadata, map[string]any{"loop_iteration": 0})
+				delete(nodeRun.Metadata, eachLoopItemCountMetadataKey)
+				delete(nodeRun.Metadata, eachLoopOutputsMetadataKey)
+				nodeRun.FinishedAt = time.Now()
+				run.Context.NodeResults[nodeID] = []any{}
+				run.Context.Variables[nodeID] = []any{}
+				run.UpdatedAt = nodeRun.FinishedAt
+				s.saveRun(ctx, run)
+				s.emit(ctx, run, wfruntime.EventNodeDone, nodeID, nodeRun.Status, "empty each-item input")
+				continue
+			}
+			// Persist the fully resolved task input before execution so the latest
+			// run payload can render per-node input/output in the editor.
+			nodeRun.Input = task.Input
 			execImpl, err := s.ExecutorDispatcher.Dispatch(task)
 			if err != nil {
 				s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
@@ -180,6 +232,10 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 				cancel()
 			}
 			if err != nil {
+				if contextErr := ctx.Err(); contextErr != nil {
+					s.cancelRun(context.WithoutCancel(ctx), run, contextErr)
+					return run, contextErr
+				}
 				s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
 				continue
 			}
@@ -204,8 +260,14 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 
 			switch status {
 			case executor.StatusSucceeded:
+				eachOutputs, appendErr := appendEachLoopOutput(nodePlan, nodeRun, result.Output)
+				if appendErr != nil {
+					s.handleNodeError(ctx, run, nodePlan, nodeRun, appendErr)
+					continue
+				}
 				run.Context.NodeResults[nodeID] = result.Output
 				run.Context.Variables[nodeID] = result.Output
+				applyResultVariables(run, result)
 				if continued, iteration, err := shouldContinueLoop(nodePlan, nodeRun, run, result.Output); err != nil {
 					s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
 					continue
@@ -221,11 +283,36 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 					s.emit(ctx, run, wfruntime.EventNodeLoop, nodeID, nodeRun.Status, fmt.Sprintf("loop iteration %d", iteration))
 					continue
 				}
+				finalOutput := result.Output
+				groupOutput, groupContinued, grouped, groupIterations, groupErr := s.advanceLoopGroup(ctx, plan, run, nodeID, result.Output)
+				if groupErr != nil {
+					s.handleNodeError(ctx, run, nodePlan, nodeRun, groupErr)
+					continue
+				}
+				if groupContinued {
+					continue
+				}
+				if grouped {
+					finalOutput = groupOutput
+					run.Context.NodeResults[nodeID] = finalOutput
+					run.Context.Variables[nodeID] = finalOutput
+				}
+				if loopMode(nodePlan.Loop) == "each" {
+					finalOutput = append([]any(nil), eachOutputs...)
+					run.Context.NodeResults[nodeID] = finalOutput
+					run.Context.Variables[nodeID] = finalOutput
+				}
 				nodeRun.Status = wfruntime.StatusSuccess
 				nodeRun.Error = ""
-				nodeRun.Result = result.Output
+				nodeRun.Result = finalOutput
 				nodeRun.Metadata = mergeMap(nodeRun.Metadata, result.Metadata)
-				nodeRun.Metadata["loop_iteration"] = loopIteration(nodeRun) + 1
+				delete(nodeRun.Metadata, eachLoopItemCountMetadataKey)
+				delete(nodeRun.Metadata, eachLoopOutputsMetadataKey)
+				if grouped {
+					nodeRun.Metadata["loop_iteration"] = groupIterations
+				} else {
+					nodeRun.Metadata["loop_iteration"] = loopIteration(nodeRun) + 1
+				}
 				nodeRun.FinishedAt = time.Now()
 				run.UpdatedAt = nodeRun.FinishedAt
 				if looped, err := s.applyBackEdges(ctx, plan, run, nodeID); err != nil {
@@ -237,13 +324,47 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 				s.saveRun(ctx, run)
 				s.emit(ctx, run, wfruntime.EventNodeDone, nodeID, nodeRun.Status, "")
 			case executor.StatusRetryable:
-				retryErr := fmt.Errorf("node requested retry: %s", result.Error)
-				s.handleNodeError(ctx, run, nodePlan, nodeRun, retryErr)
+				s.handleNodeFailure(
+					ctx,
+					run,
+					nodePlan,
+					nodeRun,
+					resultError(result, "executor requested retry"),
+					true,
+					result.RetryAfter,
+				)
 			case executor.StatusFailed:
-				s.handleNodeError(ctx, run, nodePlan, nodeRun, resultError(result, "executor failed"))
+				s.handleNodeFailure(
+					ctx,
+					run,
+					nodePlan,
+					nodeRun,
+					resultError(result, "executor failed"),
+					false,
+					0,
+				)
 			default:
 				s.handleNodeError(ctx, run, nodePlan, nodeRun, fmt.Errorf("unsupported executor status: %s", status))
 			}
+		}
+	}
+}
+
+func applyResultVariables(run *wfruntime.WorkflowRun, result executor.ExecuteResult) {
+	if run == nil {
+		return
+	}
+	if run.Context.Variables == nil {
+		run.Context.Variables = map[string]any{}
+	}
+	for _, key := range result.DeleteVariables {
+		if key != "" {
+			delete(run.Context.Variables, key)
+		}
+	}
+	for key, value := range result.Variables {
+		if key != "" {
+			run.Context.Variables[key] = value
 		}
 	}
 }
@@ -293,7 +414,21 @@ func shouldContinueLoop(node planning.PlanNode, nodeRun *wfruntime.NodeRun, run 
 		return false, 0, nil
 	}
 	currentIteration := loopIteration(nodeRun) + 1
+	if loopMode(node.Loop) == "each" {
+		itemCount, ok := metadataPositiveInt(nodeRun.Metadata, eachLoopItemCountMetadataKey)
+		if !ok {
+			return false, currentIteration, fmt.Errorf("each-item loop for node %s is missing its item count", node.ID)
+		}
+		return currentIteration < itemCount, currentIteration, nil
+	}
 	maxIterations := node.Loop.MaxIterations
+	if node.Loop.CountBinding != nil {
+		var ok bool
+		maxIterations, ok = metadataPositiveInt(nodeRun.Metadata, resolvedLoopCountMetadataKey)
+		if !ok {
+			return false, currentIteration, fmt.Errorf("node %s loop is missing its resolved count", node.ID)
+		}
+	}
 	if maxIterations <= 1 {
 		return false, currentIteration, nil
 	}
@@ -326,6 +461,141 @@ func shouldContinueLoop(node planning.PlanNode, nodeRun *wfruntime.NodeRun, run 
 		return false, currentIteration, fmt.Errorf("loop condition for node %s did not return bool", node.ID)
 	}
 	return continued, currentIteration, nil
+}
+
+func loopMode(loop *planning.LoopPolicy) string {
+	if loop == nil {
+		return ""
+	}
+	mode := strings.TrimSpace(loop.Mode)
+	if mode == "" {
+		return "count"
+	}
+	return mode
+}
+
+func ensureResolvedLoopCount(
+	run *wfruntime.WorkflowRun,
+	plan *planning.ExecutionPlan,
+	nodeID string,
+	nodeRun *wfruntime.NodeRun,
+	binding planning.InputBinding,
+	maxIterations int,
+	label string,
+) (int, error) {
+	if nodeRun == nil {
+		return 0, fmt.Errorf("%s cannot resolve its count without a node run", label)
+	}
+	if count, ok := metadataPositiveInt(nodeRun.Metadata, resolvedLoopCountMetadataKey); ok {
+		if count > maxIterations {
+			return 0, fmt.Errorf("%s resolved count %d exceeds maximum %d", label, count, maxIterations)
+		}
+		return count, nil
+	}
+	value, found, err := resolveBindingValue(run, plan, nodeID, binding)
+	if err != nil {
+		return 0, fmt.Errorf("%s count: %w", label, err)
+	}
+	if !found {
+		return 0, fmt.Errorf("%s count is missing", label)
+	}
+	count, ok := wholeNumber(value)
+	if !ok || count < 1 || count > maxIterations {
+		return 0, fmt.Errorf(
+			"%s count must be a whole number between 1 and %d, got %v",
+			label,
+			maxIterations,
+			value,
+		)
+	}
+	if nodeRun.Metadata == nil {
+		nodeRun.Metadata = map[string]any{}
+	}
+	nodeRun.Metadata[resolvedLoopCountMetadataKey] = count
+	return count, nil
+}
+
+func wholeNumber(value any) (int, bool) {
+	if number, ok := value.(json.Number); ok {
+		parsed, err := strconv.ParseInt(string(number), 10, 64)
+		if err != nil || parsed < 0 || parsed > int64(math.MaxInt) {
+			return 0, false
+		}
+		return int(parsed), true
+	}
+	if text, ok := value.(string); ok {
+		parsed, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+		if err != nil || parsed < 0 || parsed > int64(math.MaxInt) {
+			return 0, false
+		}
+		return int(parsed), true
+	}
+	reflected := reflect.ValueOf(value)
+	if !reflected.IsValid() {
+		return 0, false
+	}
+	switch reflected.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		number := reflected.Int()
+		if number < 0 || number > int64(math.MaxInt) {
+			return 0, false
+		}
+		return int(number), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		number := reflected.Uint()
+		if number > uint64(math.MaxInt) {
+			return 0, false
+		}
+		return int(number), true
+	case reflect.Float32, reflect.Float64:
+		number := reflected.Float()
+		if math.IsNaN(number) ||
+			math.IsInf(number, 0) ||
+			number != math.Trunc(number) ||
+			number < 0 ||
+			number > float64(math.MaxInt) {
+			return 0, false
+		}
+		return int(number), true
+	default:
+		return 0, false
+	}
+}
+
+func metadataPositiveInt(metadata map[string]any, key string) (int, bool) {
+	if len(metadata) == 0 {
+		return 0, false
+	}
+	switch value := metadata[key].(type) {
+	case int:
+		return value, value > 0
+	case int64:
+		return int(value), value > 0
+	case float64:
+		return int(value), value > 0 && value == float64(int(value))
+	default:
+		return 0, false
+	}
+}
+
+func appendEachLoopOutput(node planning.PlanNode, nodeRun *wfruntime.NodeRun, output any) ([]any, error) {
+	if loopMode(node.Loop) != "each" {
+		return nil, nil
+	}
+	if nodeRun.Metadata == nil {
+		nodeRun.Metadata = map[string]any{}
+	}
+	var outputs []any
+	if raw, exists := nodeRun.Metadata[eachLoopOutputsMetadataKey]; exists {
+		var ok bool
+		outputs, ok = raw.([]any)
+		if !ok {
+			return nil, fmt.Errorf("each-item loop for node %s has invalid stored outputs", node.ID)
+		}
+	}
+	outputs = append(outputs, output)
+	nodeRun.Metadata[eachLoopOutputsMetadataKey] = outputs
+	return outputs, nil
 }
 
 func loopIteration(nodeRun *wfruntime.NodeRun) int {
@@ -457,32 +727,440 @@ func topoIndex(order []string, nodeID string) int {
 	return len(order) + 1
 }
 
-func buildExecuteTask(run *wfruntime.WorkflowRun, plan *planning.ExecutionPlan, node planning.PlanNode, nodeRun *wfruntime.NodeRun) (executor.ExecuteTask, error) {
-	params := copyMap(node.Params)
+func buildExecuteTask(run *wfruntime.WorkflowRun, plan *planning.ExecutionPlan, node planning.PlanNode, nodeRun *wfruntime.NodeRun) (executor.ExecuteTask, bool, error) {
+	input, err := resolveNodeInput(run, plan, node)
+	if err != nil {
+		return executor.ExecuteTask{}, false, err
+	}
+	group, grouped := loopGroupStartingAt(plan, node.ID)
+	if grouped && group.Mode == "count" && group.CountBinding != nil {
+		if _, err := ensureResolvedLoopCount(
+			run,
+			plan,
+			node.ID,
+			nodeRun,
+			*group.CountBinding,
+			group.MaxIterations,
+			fmt.Sprintf("loop group %s", group.ID),
+		); err != nil {
+			return executor.ExecuteTask{}, false, err
+		}
+	} else if !grouped && loopMode(node.Loop) == "count" && node.Loop.CountBinding != nil {
+		if _, err := ensureResolvedLoopCount(
+			run,
+			plan,
+			node.ID,
+			nodeRun,
+			*node.Loop.CountBinding,
+			node.Loop.MaxIterations,
+			fmt.Sprintf("node %s loop", node.ID),
+		); err != nil {
+			return executor.ExecuteTask{}, false, err
+		}
+	}
+	var emptyEach bool
+	if grouped {
+		input, emptyEach, err = prepareLoopGroupInput(group, nodeRun, input)
+	} else {
+		input, emptyEach, err = prepareEachLoopInput(node, nodeRun, input)
+	}
+	if err != nil {
+		return executor.ExecuteTask{}, false, err
+	}
+	if emptyEach {
+		return executor.ExecuteTask{Input: input}, true, nil
+	}
+	if grouped {
+		applyLoopGroupVariables(run, group, input, loopGroupIteration(nodeRun)+1)
+	}
+	params, err := resolveNodeParams(run, plan, node)
+	if err != nil {
+		return executor.ExecuteTask{}, false, err
+	}
 	params["__executor_ref"] = node.ExecutorRef
 	pollInterval := durationFromMap(params, "poll_interval", time.Second)
 	hbFreq := durationFromMap(params, "heartbeat_interval", 2*time.Second)
 	async := boolFromMap(params, "async")
-	input, err := resolveNodeInput(run, plan, node)
-	if err != nil {
-		return executor.ExecuteTask{}, err
-	}
 	return executor.ExecuteTask{
-		RunID:         run.ID,
-		NodeID:        node.ID,
-		ExecutorType:  node.ExecutorType,
-		ExecutorRef:   node.ExecutorRef,
-		Attempt:       nodeRun.Attempt,
-		MaxAttempts:   nodeRun.MaxAttempts,
-		Input:         input,
-		Params:        params,
-		Context:       copyMap(run.Context.Variables),
-		Timeout:       node.Timeout,
-		Deadline:      time.Now().Add(node.Timeout),
-		Async:         async,
-		PollInterval:  pollInterval,
-		HeartbeatFreq: hbFreq,
-	}, nil
+		RunID:           run.ID,
+		NodeID:          node.ID,
+		ExecutorType:    node.ExecutorType,
+		ExecutorRef:     node.ExecutorRef,
+		CredentialScope: run.CredentialScope,
+		Attempt:         nodeRun.Attempt,
+		MaxAttempts:     nodeRun.MaxAttempts,
+		Input:           input,
+		Params:          params,
+		Context:         copyMap(run.Context.Variables),
+		Timeout:         node.Timeout,
+		Deadline:        time.Now().Add(node.Timeout),
+		Async:           async,
+		PollInterval:    pollInterval,
+		HeartbeatFreq:   hbFreq,
+	}, false, nil
+}
+
+func prepareEachLoopInput(node planning.PlanNode, nodeRun *wfruntime.NodeRun, input any) (any, bool, error) {
+	if loopMode(node.Loop) != "each" {
+		return input, false, nil
+	}
+	items, err := eachLoopItems(input)
+	if err != nil {
+		return nil, false, fmt.Errorf("each-item loop for node %s: %w", node.ID, err)
+	}
+	if len(items) > node.Loop.MaxIterations {
+		return nil, false, fmt.Errorf("each-item loop for node %s received %d items; maximum is %d", node.ID, len(items), node.Loop.MaxIterations)
+	}
+	if len(items) == 0 {
+		return input, true, nil
+	}
+	if nodeRun.Metadata == nil {
+		nodeRun.Metadata = map[string]any{}
+	}
+	nodeRun.Metadata[eachLoopItemCountMetadataKey] = len(items)
+	index := loopIteration(nodeRun)
+	if index < 0 || index >= len(items) {
+		return nil, false, fmt.Errorf("each-item loop for node %s has invalid item index %d", node.ID, index)
+	}
+	return items[index], false, nil
+}
+
+func eachLoopItems(input any) ([]any, error) {
+	value := reflect.ValueOf(input)
+	if !value.IsValid() || (value.Kind() != reflect.Slice && value.Kind() != reflect.Array) {
+		return nil, fmt.Errorf("input must be a list, got %T", input)
+	}
+	items := make([]any, value.Len())
+	for index := range items {
+		items[index] = value.Index(index).Interface()
+	}
+	return items, nil
+}
+
+func loopGroupStartingAt(plan *planning.ExecutionPlan, nodeID string) (planning.LoopGroup, bool) {
+	if plan == nil {
+		return planning.LoopGroup{}, false
+	}
+	for _, group := range plan.LoopGroups {
+		if group.Start == nodeID {
+			return group, true
+		}
+	}
+	return planning.LoopGroup{}, false
+}
+
+func loopGroupEndingAt(plan *planning.ExecutionPlan, nodeID string) (planning.LoopGroup, bool) {
+	if plan == nil {
+		return planning.LoopGroup{}, false
+	}
+	for _, group := range plan.LoopGroups {
+		if group.End == nodeID {
+			return group, true
+		}
+	}
+	return planning.LoopGroup{}, false
+}
+
+func loopGroupIteration(nodeRun *wfruntime.NodeRun) int {
+	if nodeRun == nil || len(nodeRun.Metadata) == 0 {
+		return 0
+	}
+	value, ok := metadataNonNegativeInt(nodeRun.Metadata, loopGroupIterationMetadataKey)
+	if !ok {
+		return 0
+	}
+	return value
+}
+
+func metadataNonNegativeInt(metadata map[string]any, key string) (int, bool) {
+	if len(metadata) == 0 {
+		return 0, false
+	}
+	switch value := metadata[key].(type) {
+	case int:
+		return value, value >= 0
+	case int64:
+		return int(value), value >= 0
+	case float64:
+		return int(value), value >= 0 && value == float64(int(value))
+	default:
+		return 0, false
+	}
+}
+
+func loopGroupOutputs(nodeRun *wfruntime.NodeRun) ([]any, error) {
+	if nodeRun == nil || len(nodeRun.Metadata) == 0 {
+		return nil, nil
+	}
+	raw, exists := nodeRun.Metadata[loopGroupOutputsMetadataKey]
+	if !exists {
+		return nil, nil
+	}
+	outputs, ok := raw.([]any)
+	if !ok {
+		return nil, errors.New("loop group has invalid stored outputs")
+	}
+	return outputs, nil
+}
+
+func prepareLoopGroupInput(group planning.LoopGroup, nodeRun *wfruntime.NodeRun, input any) (any, bool, error) {
+	if group.Mode != "each" {
+		return input, false, nil
+	}
+	items, err := eachLoopItems(input)
+	if err != nil {
+		return nil, false, fmt.Errorf("loop group %s: %w", group.ID, err)
+	}
+	if len(items) > group.MaxIterations {
+		return nil, false, fmt.Errorf("loop group %s received %d items; maximum is %d", group.ID, len(items), group.MaxIterations)
+	}
+	if len(items) == 0 {
+		return input, true, nil
+	}
+	if nodeRun.Metadata == nil {
+		nodeRun.Metadata = map[string]any{}
+	}
+	nodeRun.Metadata[loopGroupItemCountMetadataKey] = len(items)
+	index := loopGroupIteration(nodeRun)
+	if index >= len(items) {
+		return nil, false, fmt.Errorf("loop group %s has invalid item index %d", group.ID, index)
+	}
+	return items[index], false, nil
+}
+
+func applyLoopGroupVariables(run *wfruntime.WorkflowRun, group planning.LoopGroup, input any, index int) {
+	if run.Context.Variables == nil {
+		run.Context.Variables = map[string]any{}
+	}
+	run.Context.Variables[planning.LoopGroupIndexVariable(group.ID)] = index
+	itemKey := planning.LoopGroupItemVariable(group.ID)
+	if group.Mode == "each" {
+		run.Context.Variables[itemKey] = input
+		return
+	}
+	delete(run.Context.Variables, itemKey)
+}
+
+func clearLoopGroupVariables(run *wfruntime.WorkflowRun, group planning.LoopGroup) {
+	delete(run.Context.Variables, planning.LoopGroupItemVariable(group.ID))
+	delete(run.Context.Variables, planning.LoopGroupIndexVariable(group.ID))
+}
+
+func (s *DefaultScheduler) completeEmptyLoopGroup(
+	ctx context.Context,
+	plan *planning.ExecutionPlan,
+	run *wfruntime.WorkflowRun,
+	startID string,
+	input any,
+) (bool, error) {
+	group, ok := loopGroupStartingAt(plan, startID)
+	if !ok || group.Mode != "each" {
+		return false, nil
+	}
+	clearLoopGroupVariables(run, group)
+	now := time.Now()
+	for _, nodeID := range group.Scope {
+		nodeRun := run.NodeRuns[nodeID]
+		if nodeRun == nil {
+			return false, fmt.Errorf("loop group %s node run is missing: %s", group.ID, nodeID)
+		}
+		nodeRun.Status = wfruntime.StatusSuccess
+		nodeRun.Error = ""
+		nodeRun.Input = nil
+		nodeRun.Result = nil
+		nodeRun.Metadata = map[string]any{
+			"skipped":        true,
+			"skip_reason":    "empty_loop_input",
+			"loop_iteration": 0,
+		}
+		nodeRun.FinishedAt = now
+		delete(run.Context.NodeResults, nodeID)
+		delete(run.Context.Variables, nodeID)
+	}
+	startRun := run.NodeRuns[group.Start]
+	startRun.Input = input
+	endRun := run.NodeRuns[group.End]
+	endRun.Result = []any{}
+	endRun.Metadata = map[string]any{"loop_iteration": 0}
+	run.Context.NodeResults[group.End] = []any{}
+	run.Context.Variables[group.End] = []any{}
+	run.CurrentNodes = nil
+	run.UpdatedAt = now
+	s.saveRun(ctx, run)
+	for _, nodeID := range group.Scope {
+		s.emit(ctx, run, wfruntime.EventNodeDone, nodeID, wfruntime.StatusSuccess, "empty loop group input")
+	}
+	return true, nil
+}
+
+func (s *DefaultScheduler) advanceLoopGroup(
+	ctx context.Context,
+	plan *planning.ExecutionPlan,
+	run *wfruntime.WorkflowRun,
+	endID string,
+	output any,
+) (any, bool, bool, int, error) {
+	group, ok := loopGroupEndingAt(plan, endID)
+	if !ok {
+		return nil, false, false, 0, nil
+	}
+	startRun := run.NodeRuns[group.Start]
+	if startRun == nil {
+		return nil, false, true, 0, fmt.Errorf("loop group %s start node run is missing", group.ID)
+	}
+	outputs, err := loopGroupOutputs(startRun)
+	if err != nil {
+		return nil, false, true, 0, fmt.Errorf("loop group %s: %w", group.ID, err)
+	}
+	outputs = append(outputs, output)
+	if startRun.Metadata == nil {
+		startRun.Metadata = map[string]any{}
+	}
+	startRun.Metadata[loopGroupOutputsMetadataKey] = outputs
+	completed := loopGroupIteration(startRun) + 1
+	total := group.MaxIterations
+	if group.Mode == "each" {
+		var found bool
+		total, found = metadataPositiveInt(startRun.Metadata, loopGroupItemCountMetadataKey)
+		if !found {
+			return nil, false, true, 0, fmt.Errorf("loop group %s is missing its item count", group.ID)
+		}
+	} else if group.CountBinding != nil {
+		var found bool
+		total, found = metadataPositiveInt(startRun.Metadata, resolvedLoopCountMetadataKey)
+		if !found {
+			return nil, false, true, 0, fmt.Errorf("loop group %s is missing its resolved count", group.ID)
+		}
+	}
+	if completed < total {
+		state := map[string]any{
+			loopGroupIterationMetadataKey: completed,
+			loopGroupOutputsMetadataKey:   outputs,
+		}
+		if group.Mode == "each" {
+			state[loopGroupItemCountMetadataKey] = total
+		}
+		if group.CountBinding != nil {
+			state[resolvedLoopCountMetadataKey] = total
+		}
+		for _, nodeID := range group.Scope {
+			nodeRun := run.NodeRuns[nodeID]
+			if nodeRun == nil {
+				return nil, false, true, 0, fmt.Errorf("loop group %s node run is missing: %s", group.ID, nodeID)
+			}
+			nodeRun.Status = wfruntime.StatusPending
+			nodeRun.Attempt = 0
+			nodeRun.StartedAt = time.Time{}
+			nodeRun.FinishedAt = time.Time{}
+			nodeRun.Input = nil
+			nodeRun.Result = nil
+			nodeRun.Error = ""
+			nodeRun.Metadata = nil
+			delete(run.Context.NodeResults, nodeID)
+			delete(run.Context.Variables, nodeID)
+		}
+		startRun.Metadata = state
+		run.CurrentNodes = nil
+		run.UpdatedAt = time.Now()
+		s.saveRun(ctx, run)
+		s.emit(ctx, run, wfruntime.EventNodeLoop, endID, wfruntime.StatusPending, fmt.Sprintf("loop group %s iteration %d", group.ID, completed))
+		return nil, true, true, completed, nil
+	}
+	delete(startRun.Metadata, loopGroupIterationMetadataKey)
+	delete(startRun.Metadata, loopGroupOutputsMetadataKey)
+	delete(startRun.Metadata, loopGroupItemCountMetadataKey)
+	clearLoopGroupVariables(run, group)
+	return append([]any(nil), outputs...), false, true, completed, nil
+}
+
+func resolveNodeParams(run *wfruntime.WorkflowRun, plan *planning.ExecutionPlan, node planning.PlanNode) (map[string]any, error) {
+	params := copyMap(node.Params)
+	if len(node.ParamBindings) == 0 && len(node.ParamTemplates) == 0 {
+		return params, nil
+	}
+	templateKeys := make([]string, 0, len(node.ParamTemplates))
+	for key := range node.ParamTemplates {
+		templateKeys = append(templateKeys, key)
+	}
+	sort.Strings(templateKeys)
+	for _, key := range templateKeys {
+		value, err := resolveParamTemplate(run, plan, node.ID, node.ParamTemplates[key])
+		if err != nil {
+			return nil, fmt.Errorf("node %s parameter template %s: %w", node.ID, key, err)
+		}
+		params[key] = value
+	}
+	keys := make([]string, 0, len(node.ParamBindings))
+	for key := range node.ParamBindings {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value, ok, err := resolveBindingValue(run, plan, node.ID, node.ParamBindings[key])
+		if err != nil {
+			return nil, fmt.Errorf("node %s parameter %s: %w", node.ID, key, err)
+		}
+		if ok {
+			params[key] = value
+		}
+	}
+	return params, nil
+}
+
+func resolveParamTemplate(run *wfruntime.WorkflowRun, plan *planning.ExecutionPlan, nodeID string, template planning.ParamTemplate) (string, error) {
+	var builder strings.Builder
+	for index, segment := range template.Segments {
+		switch segment.Type {
+		case "text":
+			builder.WriteString(segment.Value)
+		case "binding":
+			if segment.Binding == nil {
+				return "", fmt.Errorf("binding segment %d is missing its binding", index)
+			}
+			value, ok, err := resolveBindingValue(run, plan, nodeID, *segment.Binding)
+			if err != nil {
+				return "", fmt.Errorf("resolve segment %d: %w", index, err)
+			}
+			if !ok {
+				continue
+			}
+			text, err := paramTemplateString(value)
+			if err != nil {
+				return "", fmt.Errorf("encode segment %d: %w", index, err)
+			}
+			builder.WriteString(text)
+		default:
+			return "", fmt.Errorf("segment %d has unsupported type %q", index, segment.Type)
+		}
+	}
+	return builder.String(), nil
+}
+
+func paramTemplateString(value any) (string, error) {
+	switch typed := value.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return typed, nil
+	case []byte:
+		return string(typed), nil
+	case bool:
+		return strconv.FormatBool(typed), nil
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32), nil
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64), nil
+	case int:
+		return strconv.Itoa(typed), nil
+	case int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprint(typed), nil
+	default:
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return "", err
+		}
+		return string(encoded), nil
+	}
 }
 
 func resolveNodeInput(run *wfruntime.WorkflowRun, plan *planning.ExecutionPlan, node planning.PlanNode) (any, error) {
@@ -817,24 +1495,25 @@ func (s *DefaultScheduler) waitAsyncResult(ctx context.Context, execImpl executo
 }
 
 func (s *DefaultScheduler) handleNodeError(ctx context.Context, run *wfruntime.WorkflowRun, nodePlan planning.PlanNode, nodeRun *wfruntime.NodeRun, err error) {
+	s.handleNodeFailure(ctx, run, nodePlan, nodeRun, err, true, 0)
+}
+
+func (s *DefaultScheduler) handleNodeFailure(
+	ctx context.Context,
+	run *wfruntime.WorkflowRun,
+	nodePlan planning.PlanNode,
+	nodeRun *wfruntime.NodeRun,
+	err error,
+	retryable bool,
+	retryAfter time.Duration,
+) {
 	nodeRun.Error = err.Error()
 	nodeRun.FinishedAt = time.Now()
 
-	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
-		nodeRun.Status = wfruntime.StatusTimeout
-		run.UpdatedAt = time.Now()
-		s.saveRun(ctx, run)
-		s.emit(ctx, run, wfruntime.EventNodeFailed, nodeRun.NodeID, nodeRun.Status, err.Error())
-		return
-	}
-
-	if nodeRun.Attempt < nodeRun.MaxAttempts {
+	if retryable && nodeRun.Attempt < nodeRun.MaxAttempts {
 		nodeRun.Status = wfruntime.StatusRetry
 		s.emit(ctx, run, wfruntime.EventNodeRetry, nodeRun.NodeID, nodeRun.Status, err.Error())
-		backoff := nodePlan.Retry.Backoff
-		if backoff <= 0 {
-			backoff = 100 * time.Millisecond
-		}
+		backoff := retryBackoff(nodePlan.Retry, nodeRun.Attempt, retryAfter)
 		if err := sleepWithContext(ctx, backoff); err != nil {
 			nodeRun.Status = wfruntime.StatusCancelled
 			nodeRun.Error = err.Error()
@@ -849,10 +1528,41 @@ func (s *DefaultScheduler) handleNodeError(ctx context.Context, run *wfruntime.W
 		return
 	}
 
-	nodeRun.Status = wfruntime.StatusFailed
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		nodeRun.Status = wfruntime.StatusTimeout
+	} else {
+		nodeRun.Status = wfruntime.StatusFailed
+	}
 	run.UpdatedAt = time.Now()
 	s.saveRun(ctx, run)
 	s.emit(ctx, run, wfruntime.EventNodeFailed, nodeRun.NodeID, nodeRun.Status, err.Error())
+}
+
+func retryBackoff(policy planning.RetryPolicy, attempt int, requested time.Duration) time.Duration {
+	backoff := policy.Backoff
+	if backoff <= 0 {
+		backoff = 100 * time.Millisecond
+	}
+	maxBackoff := policy.MaxBackoff
+	if maxBackoff <= 0 || maxBackoff > planning.MaxNodeRetryBackoff {
+		maxBackoff = planning.MaxNodeRetryBackoff
+	}
+	if attempt > 1 {
+		for index := 1; index < attempt; index++ {
+			if backoff >= maxBackoff || backoff > maxBackoff/2 {
+				backoff = maxBackoff
+				break
+			}
+			backoff *= 2
+		}
+	}
+	if requested > backoff {
+		backoff = requested
+	}
+	if backoff > maxBackoff {
+		return maxBackoff
+	}
+	return backoff
 }
 
 func (s *DefaultScheduler) saveRun(ctx context.Context, run *wfruntime.WorkflowRun) {
@@ -870,6 +1580,27 @@ func (s *DefaultScheduler) saveRun(ctx context.Context, run *wfruntime.WorkflowR
 		},
 		At: time.Now(),
 	})
+}
+
+func (s *DefaultScheduler) cancelRun(ctx context.Context, run *wfruntime.WorkflowRun, cause error) {
+	now := time.Now()
+	for _, node := range run.NodeRuns {
+		if node == nil || node.Status != wfruntime.StatusRunning {
+			continue
+		}
+		node.Status = wfruntime.StatusCancelled
+		node.FinishedAt = now
+	}
+	run.Status = wfruntime.StatusCancelled
+	run.CurrentNodes = nil
+	run.UpdatedAt = now
+	run.FinishedAt = now
+	s.saveRun(ctx, run)
+	message := ""
+	if cause != nil {
+		message = cause.Error()
+	}
+	s.emit(ctx, run, wfruntime.EventRunFinished, "", run.Status, message)
 }
 
 func (s *DefaultScheduler) emit(ctx context.Context, run *wfruntime.WorkflowRun, typ wfruntime.EventType, nodeID string, status wfruntime.Status, msg string) {
@@ -954,7 +1685,7 @@ func firstBlockedNode(run *wfruntime.WorkflowRun) string {
 	return ""
 }
 
-func newRunID() string {
+func NewRunID() string {
 	if id, err := fn.GenerateShortID(); err == nil {
 		return id
 	}

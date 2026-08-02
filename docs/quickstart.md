@@ -523,10 +523,37 @@ curl http://127.0.0.1:8080/v1/runs/<run-id>/snapshots
   "publish_config": {
     "enabled": true,
     "route": "/api/doc-demo",
-    "method": "POST"
+    "method": "POST",
+    "input_mode": "body",
+    "response_mode": "result",
+    "timeout": 10000
   }
 }
 ```
+
+- `input_mode: "body"` 将 JSON 对象字段映射为同名工作流变量；`query` 映射查询参数；`request` 只保留完整请求对象。
+- `response_mode: "result"` 返回本次执行命中的 `TerminalUnit`（返回结果）输出；`run` 返回完整运行详情，适合调试。
+- `timeout` 使用毫秒，范围为 `0` 到 `86400000`；`0` 表示不设置发布层超时。
+
+`result` 模式要求工作流至少包含一个 `TerminalUnit`。条件分支可以各自包含返回动作，但单次执行必须只命中一个。
+
+发布后可以读取机器可用的服务契约。契约包含实际访问地址、版本、输入模式、六语言字段名称、必填规则、选项和请求示例：
+
+```bash
+curl http://127.0.0.1:8080/v1/workflows/wf-doc-demo/contract
+```
+
+当 `input_mode` 为 `body` 或 `query` 时，后端会使用 `metadata.run_form` 校验并规范化输入。运行表单因此同时是 Web 表单和 API 输入契约，无需为每个服务另写校验代码。
+
+Web 编辑器的 API 测试表单通过控制面调用同一个活动版本：
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/workflows/wf-doc-demo/invoke \
+  -H 'Content-Type: application/json' \
+  -d '{"input":{"message":"hello"}}'
+```
+
+该接口仍执行发布输入校验、超时和响应适配，不维护独立的测试执行分支。
 
 发布后直接调用：
 

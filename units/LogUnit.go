@@ -32,17 +32,24 @@ func (t *LogicUnit) GetUnitMeta() *unit.Unit {
 }
 
 func NewLogUnit() LogicUnit {
-	unit := LogicUnit{}
-	unit.UnitName = unit.GetUnitName()
-	return unit
+	return newLogicAlias("LogUnit")
+}
+
+func newLogicAlias(name string) LogicUnit {
+	action := LogicUnit{}
+	action.UnitName = name
+	return action
+}
+
+func logicAliasFactory(name string) unit.Factory {
+	return func() unit.ExecutableUnit {
+		action := newLogicAlias(name)
+		return &action
+	}
 }
 
 func init() {
-	factory := func() unit.ExecutableUnit {
-		unit := &LogicUnit{}
-		unit.UnitName = unit.GetUnitName()
-		return unit
-	}
-	unit.RegisterUnitFactory("LogicUnit", factory)
-	unit.RegisterUnitFactory("LogUnit", factory)
+	unit.RegisterUnitFactory("IfUnit", logicAliasFactory("IfUnit"))
+	unit.RegisterUnitFactory("LogicUnit", logicAliasFactory("LogicUnit"))
+	unit.RegisterUnitFactory("LogUnit", logicAliasFactory("LogUnit"))
 }

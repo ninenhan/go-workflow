@@ -36,29 +36,40 @@ func (d *DefaultDispatcher) Dispatch(plan *planning.ExecutionPlan, run *wfruntim
 
 func depsDone(plan *planning.ExecutionPlan, run *wfruntime.WorkflowRun, nodeID string) bool {
 	deps := plan.Dependencies[nodeID]
-	branchRequired := false
-	branchActivated := false
+	if len(deps) == 0 {
+		return true
+	}
+	hasActivePath := false
 	for _, dep := range deps {
 		depRun := run.NodeRuns[dep]
 		if depRun == nil {
 			return false
 		}
+		// A conditional edge cannot be classified as inactive until its source
+		// has produced a terminal result.
+		if !wfruntime.IsTerminal(depRun.Status) {
+			return false
+		}
+		// A skipped predecessor never activates any outgoing edge. Handle it
+		// before branch evaluation because a skipped branch source has no result.
+		if nodeRunSkipped(depRun) {
+			continue
+		}
 		activated, conditional, err := edgeActivated(plan, run, dep, nodeID)
 		if err != nil {
 			return false
 		}
-		if conditional {
-			branchRequired = true
-			if activated {
-				branchActivated = true
-			}
+		if conditional && !activated {
 			continue
 		}
 		switch depRun.Status {
 		case wfruntime.StatusSuccess:
-			continue
+			if !nodeRunSkipped(depRun) {
+				hasActivePath = true
+			}
 		case wfruntime.StatusFailed, wfruntime.StatusTimeout:
 			if depNode, ok := plan.Nodes[dep]; ok && depNode.ContinueOnError {
+				hasActivePath = true
 				continue
 			}
 			return false
@@ -66,10 +77,7 @@ func depsDone(plan *planning.ExecutionPlan, run *wfruntime.WorkflowRun, nodeID s
 			return false
 		}
 	}
-	if branchRequired && !branchActivated {
-		return false
-	}
-	return true
+	return hasActivePath
 }
 
 func shouldSkipNode(plan *planning.ExecutionPlan, run *wfruntime.WorkflowRun, nodeID string) bool {
@@ -77,8 +85,8 @@ func shouldSkipNode(plan *planning.ExecutionPlan, run *wfruntime.WorkflowRun, no
 	if len(deps) == 0 {
 		return false
 	}
-	branchRequired := false
-	branchActivated := false
+	hasActivePath := false
+	hasInactivePath := false
 	allResolved := true
 	for _, dep := range deps {
 		depRun := run.NodeRuns[dep]
@@ -86,18 +94,35 @@ func shouldSkipNode(plan *planning.ExecutionPlan, run *wfruntime.WorkflowRun, no
 			allResolved = false
 			continue
 		}
+		// Skipping a structured branch controller must propagate through its
+		// descendants without evaluating conditions against a missing result.
+		if nodeRunSkipped(depRun) {
+			hasInactivePath = true
+			continue
+		}
 		activated, conditional, err := edgeActivated(plan, run, dep, nodeID)
 		if err != nil {
 			return false
 		}
 		if conditional {
-			branchRequired = true
 			if activated {
-				branchActivated = true
+				hasActivePath = true
+			} else {
+				hasInactivePath = true
 			}
+			continue
 		}
+		hasActivePath = true
 	}
-	return allResolved && branchRequired && !branchActivated
+	return allResolved && hasInactivePath && !hasActivePath
+}
+
+func nodeRunSkipped(run *wfruntime.NodeRun) bool {
+	if run == nil || run.Metadata == nil {
+		return false
+	}
+	skipped, _ := run.Metadata["skipped"].(bool)
+	return skipped
 }
 
 type branchEvalEnv struct {

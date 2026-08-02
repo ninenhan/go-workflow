@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/ninenhan/go-workflow/core/credential"
 	"github.com/ninenhan/go-workflow/core/executor"
 	"github.com/ninenhan/go-workflow/core/workerproto"
 	_ "github.com/ninenhan/go-workflow/units"
@@ -11,10 +12,11 @@ import (
 )
 
 type Options struct {
-	Enabled          bool
-	RegisterBuiltins bool
-	Registry         *executor.Registry
-	UnitRegistry     *workerunit.Registry
+	Enabled            bool
+	RegisterBuiltins   bool
+	Registry           *executor.Registry
+	UnitRegistry       *workerunit.Registry
+	CredentialResolver credential.Resolver
 }
 
 // Service is the embedded worker runtime. It can be disabled when the deployment
@@ -23,6 +25,7 @@ type Service struct {
 	enabled      bool
 	registry     *executor.Registry
 	unitRegistry *workerunit.Registry
+	credentials  credential.Resolver
 }
 
 func NewService(opts Options) (*Service, error) {
@@ -34,9 +37,13 @@ func NewService(opts Options) (*Service, error) {
 		enabled:      opts.Enabled,
 		registry:     reg,
 		unitRegistry: opts.UnitRegistry,
+		credentials:  opts.CredentialResolver,
 	}
 	if svc.unitRegistry == nil {
 		svc.unitRegistry = workerunit.DefaultRegistry
+	}
+	if svc.credentials == nil {
+		svc.credentials = credential.EnvironmentResolver{}
 	}
 	if !svc.enabled {
 		return svc, nil
@@ -103,7 +110,7 @@ func (s *Service) registerBuiltins() error {
 		executor.NewLocalExecutor(),
 		executor.NewHTTPExecutor(nil),
 		executor.NewScriptExecutor(),
-		workerunit.NewExecutor(s.unitRegistry),
+		workerunit.NewExecutorWithCredentials(s.unitRegistry, s.credentials),
 		&executor.ContainerExecutor{},
 	}
 	for _, exec := range builtins {

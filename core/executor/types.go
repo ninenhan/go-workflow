@@ -34,31 +34,78 @@ const (
 )
 
 type ExecuteTask struct {
-	RunID         string         `json:"run_id"`
-	NodeID        string         `json:"node_id"`
-	ExecutorType  string         `json:"executor_type"`
-	ExecutorRef   string         `json:"executor_ref,omitempty"`
-	Attempt       int            `json:"attempt,omitempty"`
-	MaxAttempts   int            `json:"max_attempts,omitempty"`
-	Input         any            `json:"input,omitempty"`
-	Params        map[string]any `json:"params,omitempty"`
-	Context       map[string]any `json:"context,omitempty"`
-	Timeout       time.Duration  `json:"timeout,omitempty"`
-	Deadline      time.Time      `json:"deadline,omitempty"`
-	Async         bool           `json:"async,omitempty"`
-	PollInterval  time.Duration  `json:"poll_interval,omitempty"`
-	HeartbeatFreq time.Duration  `json:"heartbeat_freq,omitempty"`
+	RunID           string         `json:"run_id"`
+	NodeID          string         `json:"node_id"`
+	ExecutorType    string         `json:"executor_type"`
+	ExecutorRef     string         `json:"executor_ref,omitempty"`
+	CredentialScope string         `json:"credential_scope,omitempty"`
+	Attempt         int            `json:"attempt,omitempty"`
+	MaxAttempts     int            `json:"max_attempts,omitempty"`
+	Input           any            `json:"input,omitempty"`
+	Params          map[string]any `json:"params,omitempty"`
+	Context         map[string]any `json:"context,omitempty"`
+	Timeout         time.Duration  `json:"timeout,omitempty"`
+	Deadline        time.Time      `json:"deadline,omitempty"`
+	Async           bool           `json:"async,omitempty"`
+	PollInterval    time.Duration  `json:"poll_interval,omitempty"`
+	HeartbeatFreq   time.Duration  `json:"heartbeat_freq,omitempty"`
 }
 
 type ExecuteResult struct {
-	Status         Status         `json:"status,omitempty"`
-	Output         any            `json:"output,omitempty"`
-	Error          string         `json:"error,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
-	Logs           []string       `json:"logs,omitempty"`
-	ExternalTaskID string         `json:"external_task_id,omitempty"`
-	RetryAfter     time.Duration  `json:"retry_after,omitempty"`
-	FinishedAt     time.Time      `json:"finished_at,omitempty"`
+	Status          Status         `json:"status,omitempty"`
+	Output          any            `json:"output,omitempty"`
+	Variables       map[string]any `json:"variables,omitempty"`
+	DeleteVariables []string       `json:"delete_variables,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
+	Logs            []string       `json:"logs,omitempty"`
+	ExternalTaskID  string         `json:"external_task_id,omitempty"`
+	RetryAfter      time.Duration  `json:"retry_after,omitempty"`
+	FinishedAt      time.Time      `json:"finished_at,omitempty"`
+}
+
+// ExecutionFailure lets executors distinguish permanent failures from
+// transient failures without making the scheduler inspect error strings.
+type ExecutionFailure struct {
+	Err        error
+	Retry      bool
+	RetryAfter time.Duration
+}
+
+func (e *ExecutionFailure) Error() string {
+	if e == nil || e.Err == nil {
+		return "execution failed"
+	}
+	return e.Err.Error()
+}
+
+func (e *ExecutionFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func PermanentFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ExecutionFailure{Err: err}
+}
+
+func RetryableFailure(err error, retryAfter time.Duration) error {
+	if err == nil {
+		return nil
+	}
+	return &ExecutionFailure{Err: err, Retry: true, RetryAfter: retryAfter}
+}
+
+func ClassifyFailure(err error) (retryable bool, retryAfter time.Duration, classified bool) {
+	var failure *ExecutionFailure
+	if !errors.As(err, &failure) {
+		return false, 0, false
+	}
+	return failure.Retry, failure.RetryAfter, true
 }
 
 func (r ExecuteResult) NormalizedStatus() Status {
