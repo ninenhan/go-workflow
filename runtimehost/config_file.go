@@ -38,8 +38,9 @@ type FileRuntimeConfig struct {
 }
 
 type FileDesktopConfig struct {
-	PreventSleep  *bool `yaml:"prevent_sleep,omitempty" mapstructure:"prevent_sleep"`
-	LaunchAtLogin *bool `yaml:"launch_at_login,omitempty" mapstructure:"launch_at_login"`
+	PreventSleep  *bool  `yaml:"prevent_sleep,omitempty" mapstructure:"prevent_sleep"`
+	LaunchAtLogin *bool  `yaml:"launch_at_login,omitempty" mapstructure:"launch_at_login"`
+	Language      string `yaml:"language,omitempty" mapstructure:"language"`
 }
 
 type FileStorageConfig struct {
@@ -105,7 +106,7 @@ var configFields = map[string]map[string]struct{}{
 		"listen_host": {}, "port": {}, "data_directory": {}, "embedded_worker": {}, "automations": {}, "automation_period": {},
 	},
 	"desktop": {
-		"prevent_sleep": {}, "launch_at_login": {},
+		"prevent_sleep": {}, "launch_at_login": {}, "language": {},
 	},
 	"storage": {
 		"database": {},
@@ -190,6 +191,10 @@ func (config FileConfig) Validate() error {
 		if err != nil || parsed <= 0 {
 			return errors.New("runtime.automation_period must be a positive Go duration such as 1s")
 		}
+	}
+	language := strings.TrimSpace(config.Desktop.Language)
+	if language != "" && language != "zh-CN" && language != "zh-TW" && language != "en" && language != "ja" && language != "es" && language != "bo" {
+		return fmt.Errorf("desktop.language %q is invalid", language)
 	}
 	driver := strings.ToLower(strings.TrimSpace(config.Storage.Database.Driver))
 	if driver != "" && driver != "sqlite" && driver != "mysql" && driver != "postgres" {

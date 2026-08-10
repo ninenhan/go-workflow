@@ -22,6 +22,7 @@ runtime:
 desktop:
   prevent_sleep: true
   launch_at_login: false
+  language: en
 storage:
   database:
     driver: sqlite
@@ -61,6 +62,9 @@ extensions:
 	}
 	if fileConfig.Desktop.PreventSleep == nil || !*fileConfig.Desktop.PreventSleep {
 		t.Fatal("desktop prevent_sleep was not decoded")
+	}
+	if fileConfig.Desktop.Language != "en" {
+		t.Fatalf("desktop language = %q", fileConfig.Desktop.Language)
 	}
 }
 
@@ -131,6 +135,7 @@ func TestLoadConfigFileRejectsUnknownAndInvalidFields(t *testing.T) {
 		"version":  "version: 2\nruntime: {}\n",
 		"port":     "version: 1\nruntime:\n  port: 70000\n",
 		"period":   "version: 1\nruntime:\n  automation_period: never\n",
+		"language": "version: 1\nruntime: {}\ndesktop:\n  language: klingon\n",
 		"multiple": "version: 1\nruntime: {}\n---\nversion: 1\nruntime: {}\n",
 	} {
 		t.Run(name, func(t *testing.T) {

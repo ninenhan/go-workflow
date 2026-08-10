@@ -9,6 +9,8 @@ runtime:
   automation_period: 1s
 
 desktop:
+  # Desktop UI language: zh-CN, zh-TW, en, ja, es, or bo.
+  language: en
   # Electron keeps the system awake while the App is running. The display may
   # still sleep, and an already sleeping computer is not woken automatically.
   prevent_sleep: false

@@ -50,6 +50,7 @@ runtime:
   automations: true
   automation_period: 1s
 desktop:
+  language: en
   prevent_sleep: false
   launch_at_login: false
 storage:
@@ -68,7 +69,9 @@ extensions: {}
 ```
 
 `runtime` is consumed by server, desktop, and headless hosts. `desktop` remains
-in the same file but is only acted on by Electron. Turning off the embedded
+in the same file but is only acted on by Electron. `desktop.language` is shared
+by the main toolbar and settings window and accepts `zh-CN`, `zh-TW`, `en`,
+`ja`, `es`, or `bo`. Turning off the embedded
 worker leaves the scheduler in remote-worker-only mode; it is not an in-memory
 or no-op fallback. Turning off automations stops scheduled trigger polling while
 manual and published API runs remain available.
@@ -189,6 +192,14 @@ SQLite data. Desktop-only changes are applied without restarting the sidecar.
 The settings page is available from the App toolbar, the application menu, or
 `Cmd/Ctrl+,`. Its renderer remains sandboxed and can only call narrow IPC
 operations for validated configuration, directory selection, and file reveal.
+The data-storage category treats the primary SQL database and Redis as separate
+stores with aligned connection forms. The configuration category includes a
+basic view and an advanced syntax-highlighted YAML editor; advanced saves
+validate the complete document before an atomic write and preserve its source
+text and comments. Its validation matches the Go profile loader's
+`${ENV_VAR:default}` substitution and `!include` scalar-file behavior without
+expanding either construct in the saved source. The window sizes itself from the active display work area,
+while its content pane remains independently scrollable at smaller sizes.
 `prevent_sleep` uses Electron's application-suspension blocker: the display may
 turn off, but the operating system does not sleep while the App is running. It
 does not wake a computer that is already asleep. `launch_at_login` is applied by
