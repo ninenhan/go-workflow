@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -27,6 +28,7 @@ const workflowServerHelperProcess = "GO_WORKFLOW_SERVER_HELPER_PROCESS"
 
 func TestWorkflowServerHelperProcess(t *testing.T) {
 	if os.Getenv(workflowServerHelperProcess) == "1" {
+		os.Args = []string{os.Args[0]}
 		main()
 	}
 }
@@ -61,6 +63,75 @@ func TestWorkflowServerRuntimeUnitManifestIsDeterministic(t *testing.T) {
 	}
 	if err := writeRuntimeUnits(nil); err == nil {
 		t.Fatal("nil runtime unit manifest destination must fail")
+	}
+}
+
+func TestHostOptionsUseConfigEnvironmentAndCLIOrder(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yml")
+	if err := os.WriteFile(configPath, []byte(`version: 1
+runtime:
+  listen_host: 127.0.0.2
+  port: 58080
+  data_directory: file-data
+  embedded_worker: false
+  automations: false
+  automation_period: 4s
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	environment := map[string]string{
+		"WORKFLOW_ADDR":              "127.0.0.3:58081",
+		"WORKFLOW_AUTOMATION_PERIOD": "5s",
+		"WORKFLOW_AUTOMATIONS":       "true",
+	}
+	config, err := parseHostOptions(
+		[]string{
+			"--config=" + configPath,
+			"--addr=127.0.0.4:58082",
+			"--embedded-worker=true",
+		},
+		func(name string) string { return environment[name] },
+		io.Discard,
+	)
+	if err != nil {
+		t.Fatalf("parse options: %v", err)
+	}
+	if config.Address != "127.0.0.4:58082" {
+		t.Fatalf("address = %q", config.Address)
+	}
+	if config.DisableEmbeddedWorker {
+		t.Fatal("CLI did not override config embedded_worker")
+	}
+	if config.DisableAutomations {
+		t.Fatal("environment did not override config automations")
+	}
+	if config.AutomationPeriod != 5*time.Second {
+		t.Fatalf("automation period = %s", config.AutomationPeriod)
+	}
+	if !filepath.IsAbs(config.DataDirectory) || !strings.HasSuffix(config.DataDirectory, "file-data") {
+		t.Fatalf("data directory = %q", config.DataDirectory)
+	}
+}
+
+func TestHostOptionsRequireExplicitConfigAndStrictEnvironment(t *testing.T) {
+	if _, err := parseHostOptions(
+		[]string{"--config=" + filepath.Join(t.TempDir(), "missing.yml")},
+		os.Getenv,
+		io.Discard,
+	); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing explicit config error = %v", err)
+	}
+	if _, err := parseHostOptions(
+		nil,
+		func(name string) string {
+			if name == "WORKFLOW_AUTOMATIONS" {
+				return "sometimes"
+			}
+			return ""
+		},
+		io.Discard,
+	); err == nil || !strings.Contains(err.Error(), "WORKFLOW_AUTOMATIONS") {
+		t.Fatalf("invalid environment error = %v", err)
 	}
 }
 
@@ -1373,8 +1444,11 @@ func startWorkflowServerProcess(t *testing.T, address, dataDirectory string) (*e
 	command := exec.Command(os.Args[0], "-test.run=^TestWorkflowServerHelperProcess$")
 	command.Env = append(os.Environ(),
 		workflowServerHelperProcess+"=1",
+		"WORKFLOW_MODE=headless",
 		"WORKFLOW_ADDR="+address,
 		"WORKFLOW_DATA_DIR="+dataDirectory,
+		"WORKFLOW_WEB_DIR=",
+		"WORKFLOW_DESKTOP_TOKEN=",
 	)
 	command.Stdout = output
 	command.Stderr = output

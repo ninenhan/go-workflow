@@ -130,9 +130,21 @@ func (r *WorkflowRun) Clone() *WorkflowRun {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	cp := *r
-	cp.CurrentNodes = append([]string{}, r.CurrentNodes...)
-	cp.NodeRuns = make(map[string]*NodeRun, len(r.NodeRuns))
+	cp := &WorkflowRun{
+		ID:                 r.ID,
+		WorkflowID:         r.WorkflowID,
+		WorkflowVersionID:  r.WorkflowVersionID,
+		PlanID:             r.PlanID,
+		RequestFingerprint: r.RequestFingerprint,
+		CredentialScope:    r.CredentialScope,
+		Status:             r.Status,
+		CurrentNodes:       append([]string{}, r.CurrentNodes...),
+		NodeRuns:           make(map[string]*NodeRun, len(r.NodeRuns)),
+		CreatedAt:          r.CreatedAt,
+		UpdatedAt:          r.UpdatedAt,
+		StartedAt:          r.StartedAt,
+		FinishedAt:         r.FinishedAt,
+	}
 	for id, nr := range r.NodeRuns {
 		if nr == nil {
 			cp.NodeRuns[id] = nil
@@ -146,7 +158,7 @@ func (r *WorkflowRun) Clone() *WorkflowRun {
 		Variables:   cloneAnyMap(r.Context.Variables),
 		NodeResults: cloneAnyMap(r.Context.NodeResults),
 	}
-	return &cp
+	return cp
 }
 
 func cloneAnyMap(src map[string]any) map[string]any {

@@ -11,4 +11,4 @@ v0_build_web "${web_source_directory}"
 
 export WORKFLOW_WEB_DIR="${v0_web_build_directory}"
 cd "${root_directory}"
-exec go run ./cmd/workflow-server
+exec go run ./cmd/workflow-server --mode=server

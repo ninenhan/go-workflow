@@ -27,6 +27,11 @@ Set `WORKFLOW_DATA_DIR` or `WORKFLOW_ADDR` before the launcher to override
 either value. Unix packages enforce private directory and database modes.
 Windows packages use the current user's inherited LocalAppData ACL.
 
+Copy `config.example.yml` to a private location, edit it, and pass
+`--config=/absolute/path/config.yml` to `run.sh` or `run.cmd` for file-based
+configuration. Environment variables override the file and explicit CLI flags
+override both. The same schema is written by the Electron App settings page.
+
 `RELEASE.json` identifies the version, platform, source revision, dirty source
 state, build time, and whether release verification was native or static.
 `SHA256SUMS` covers every shipped file except itself. `RUNTIME_UNITS.json` is

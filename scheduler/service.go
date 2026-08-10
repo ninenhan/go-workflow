@@ -194,6 +194,10 @@ func (s *Service) RunDefinition(ctx context.Context, def *definition.WorkflowDef
 // background. The returned value is an immutable snapshot safe for immediate
 // HTTP serialization while the scheduler owns the live run instance.
 func (s *Service) StartVersion(ctx context.Context, version *definition.WorkflowVersion, run *wfruntime.WorkflowRun) (*wfruntime.WorkflowRun, error) {
+	return s.startVersion(ctx, version, run, 0)
+}
+
+func (s *Service) startVersion(ctx context.Context, version *definition.WorkflowVersion, run *wfruntime.WorkflowRun, timeout time.Duration) (*wfruntime.WorkflowRun, error) {
 	if s == nil || s.engine == nil || s.engine.Compiler == nil || s.engine.Scheduler == nil {
 		return nil, errors.New("scheduler service is not configured")
 	}
@@ -214,7 +218,13 @@ func (s *Service) StartVersion(ctx context.Context, version *definition.Workflow
 		return nil, err
 	}
 	prepared.RequestFingerprint = requestFingerprint
-	executionCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	executionCtx := context.WithoutCancel(ctx)
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		executionCtx, cancel = context.WithTimeout(executionCtx, timeout)
+	} else {
+		executionCtx, cancel = context.WithCancel(executionCtx)
+	}
 	s.runLifecycleMu.Lock()
 	if s.shuttingDown {
 		s.runLifecycleMu.Unlock()
@@ -669,6 +679,30 @@ func (s *Service) RunPublishedWorkflow(ctx context.Context, workflowID string, r
 }
 
 func (s *Service) RunPublishedVersion(ctx context.Context, version *definition.WorkflowVersion, request *http.Request) (*wfruntime.WorkflowRun, error) {
+	run, err := s.buildPublishedRun(version, request)
+	if err != nil {
+		return nil, err
+	}
+	if timeout := version.Definition.PublishConfig.TimeoutMS; timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Millisecond)
+		defer cancel()
+	}
+	return s.RunVersion(ctx, version, run)
+}
+
+// StartPublishedVersion validates published input and starts the same immutable
+// version used by synchronous published calls.
+func (s *Service) StartPublishedVersion(ctx context.Context, version *definition.WorkflowVersion, request *http.Request) (*wfruntime.WorkflowRun, error) {
+	run, err := s.buildPublishedRun(version, request)
+	if err != nil {
+		return nil, err
+	}
+	timeout := time.Duration(version.Definition.PublishConfig.TimeoutMS) * time.Millisecond
+	return s.startVersion(ctx, version, run, timeout)
+}
+
+func (s *Service) buildPublishedRun(version *definition.WorkflowVersion, request *http.Request) (*wfruntime.WorkflowRun, error) {
 	if version == nil {
 		return nil, errors.New("published workflow version is required")
 	}
@@ -682,12 +716,7 @@ func (s *Service) RunPublishedVersion(ctx context.Context, version *definition.W
 	if s.credentialScope != "" {
 		run.CredentialScope = s.credentialScope
 	}
-	if timeout := version.Definition.PublishConfig.TimeoutMS; timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Millisecond)
-		defer cancel()
-	}
-	return s.RunVersion(ctx, version, run)
+	return run, nil
 }
 
 func (s *Service) RunHTTPTrigger(ctx context.Context, workflowID string, request *http.Request) (*wfruntime.WorkflowRun, error) {

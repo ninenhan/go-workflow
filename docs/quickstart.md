@@ -555,6 +555,35 @@ curl -X POST http://127.0.0.1:8080/v1/workflows/wf-doc-demo/invoke \
 
 该接口仍执行发布输入校验、超时和响应适配，不维护独立的测试执行分支。
 
+耗时较短的工作流可以使用同步 HTTP，一次响应直接取得最终结果。耗时较长或需要展示执行进度时，先异步启动，再连接返回的 SSE 地址：
+
+```bash
+curl -X POST 'http://127.0.0.1:8080/v1/workflows/wf-doc-demo/invoke?wait=false' \
+  -H 'Content-Type: application/json' \
+  -d '{"input":{"message":"hello"}}'
+```
+
+启动成功返回 `202 Accepted`：
+
+```json
+{
+  "run_id": "<run-id>",
+  "status": "pending",
+  "source": "publish",
+  "run_url": "http://127.0.0.1:8080/v1/runs/<run-id>",
+  "events_url": "http://127.0.0.1:8080/v1/runs/<run-id>/events",
+  "stream_url": "http://127.0.0.1:8080/v1/runs/<run-id>/stream"
+}
+```
+
+使用响应中的 `stream_url` 读取进度与最终结果：
+
+```bash
+curl -N http://127.0.0.1:8080/v1/runs/<run-id>/stream
+```
+
+事件流依次包含 `ready`、若干 `run_event`，最后发送一个 `result` 或 `error` 并关闭连接。客户端断线重连时可发送 `Last-Event-ID`，避免重复接收已确认的运行事件；终态事件 ID 固定为 `result`，携带该 ID 重连会返回 `204 No Content` 并停止自动重连。
+
 发布后直接调用：
 
 ```bash

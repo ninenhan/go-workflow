@@ -32,6 +32,9 @@ type PublishedAPIContract struct {
 	Description  string                   `json:"description,omitempty"`
 	Route        string                   `json:"route"`
 	URL          string                   `json:"url,omitempty"`
+	InvokeURL    string                   `json:"invoke_url,omitempty"`
+	AsyncURL     string                   `json:"async_url,omitempty"`
+	StreamURL    string                   `json:"stream_url_template,omitempty"`
 	Method       string                   `json:"method"`
 	InputMode    string                   `json:"input_mode"`
 	ResponseMode string                   `json:"response_mode"`

@@ -842,6 +842,11 @@ func TestHTTPHandler_PublishedRouteMapsBodyAndReturnsResult(t *testing.T) {
 	if contractBody.Contract.URL != server.URL+"/api/published/result" {
 		t.Fatalf("contract url = %q", contractBody.Contract.URL)
 	}
+	if contractBody.Contract.InvokeURL != server.URL+"/v1/workflows/"+workflowID+"/invoke" ||
+		contractBody.Contract.AsyncURL != server.URL+"/v1/workflows/"+workflowID+"/invoke?wait=false" ||
+		contractBody.Contract.StreamURL != server.URL+"/v1/runs/{run_id}/stream" {
+		t.Fatalf("contract streaming URLs = %+v", contractBody.Contract)
+	}
 
 	resp, err := http.Post(server.URL+"/api/published/result", "application/json", bytes.NewReader([]byte(`{"name":"Grace"}`)))
 	if err != nil {
@@ -878,6 +883,58 @@ func TestHTTPHandler_PublishedRouteMapsBodyAndReturnsResult(t *testing.T) {
 	invokeResponse.Body.Close()
 	if invokeResponse.StatusCode != http.StatusOK || invokeDecodeErr != nil || invokeBody.Result["greeting"] != "Lin" || invokeBody.RunID == "" {
 		t.Fatalf("invoke status=%d decode=%v body=%+v", invokeResponse.StatusCode, invokeDecodeErr, invokeBody)
+	}
+
+	asyncResponse, err := http.Post(
+		server.URL+"/v1/workflows/"+workflowID+"/invoke?wait=false",
+		"application/json",
+		bytes.NewReader([]byte(`{"input":{"name":"Ada"}}`)),
+	)
+	if err != nil {
+		t.Fatalf("start asynchronous published workflow: %v", err)
+	}
+	var accepted struct {
+		RunID     string           `json:"run_id"`
+		Status    wfruntime.Status `json:"status"`
+		Source    string           `json:"source"`
+		StreamURL string           `json:"stream_url"`
+	}
+	asyncDecodeErr := json.NewDecoder(asyncResponse.Body).Decode(&accepted)
+	asyncResponse.Body.Close()
+	if asyncResponse.StatusCode != http.StatusAccepted || asyncDecodeErr != nil || accepted.RunID == "" || accepted.Source != "publish" || accepted.StreamURL == "" {
+		t.Fatalf("async invoke status=%d decode=%v body=%+v", asyncResponse.StatusCode, asyncDecodeErr, accepted)
+	}
+
+	streamResponse, err := http.Get(accepted.StreamURL)
+	if err != nil {
+		t.Fatalf("stream published workflow: %v", err)
+	}
+	streamBody, streamReadErr := io.ReadAll(streamResponse.Body)
+	streamResponse.Body.Close()
+	if streamReadErr != nil || streamResponse.StatusCode != http.StatusOK || !strings.HasPrefix(streamResponse.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("stream status=%d content-type=%q read=%v", streamResponse.StatusCode, streamResponse.Header.Get("Content-Type"), streamReadErr)
+	}
+	streamText := string(streamBody)
+	if !strings.Contains(streamText, "event: ready") ||
+		!strings.Contains(streamText, "event: result") ||
+		!strings.Contains(streamText, "id: result") ||
+		!strings.Contains(streamText, `"greeting":"Ada"`) ||
+		!strings.Contains(streamText, `"run_id":"`+accepted.RunID+`"`) {
+		t.Fatalf("unexpected SSE stream: %s", streamText)
+	}
+
+	reconnectRequest, err := http.NewRequest(http.MethodGet, accepted.StreamURL, nil)
+	if err != nil {
+		t.Fatalf("create stream reconnect request: %v", err)
+	}
+	reconnectRequest.Header.Set("Last-Event-ID", "result")
+	reconnectResponse, err := http.DefaultClient.Do(reconnectRequest)
+	if err != nil {
+		t.Fatalf("reconnect completed stream: %v", err)
+	}
+	reconnectResponse.Body.Close()
+	if reconnectResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("completed stream reconnect status=%d", reconnectResponse.StatusCode)
 	}
 
 	for name, payload := range map[string]string{

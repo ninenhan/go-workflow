@@ -1,0 +1,37 @@
+version: 1
+
+runtime:
+  listen_host: 127.0.0.1
+  port: 55080
+  data_directory: ./data
+  embedded_worker: true
+  automations: true
+  automation_period: 1s
+
+desktop:
+  # Electron keeps the system awake while the App is running. The display may
+  # still sleep, and an already sleeping computer is not woken automatically.
+  prevent_sleep: false
+  # Applied by packaged macOS and Windows Apps; ignored by server/headless hosts.
+  launch_at_login: false
+
+storage:
+  database:
+    # This V0 build supports sqlite. mysql/postgres fields are versioned now so
+    # future adapter builds can consume the same user-maintained file.
+    driver: sqlite
+    dsn: ""
+    dsn_env: ""
+
+redis:
+  # This V0 build supports disabled. local/remote connection fields are retained
+  # by the App but require a build that includes the Redis runtime adapter.
+  mode: disabled
+  address: 127.0.0.1:6379
+  username: ""
+  password_env: ""
+  database: 0
+  tls: false
+
+# Namespaced host/plugin configuration is preserved by the App settings writer.
+extensions: {}

@@ -73,6 +73,10 @@ V0 可以把生产构建后的 Web、工作流 API、内嵌 worker、SQLite 状�
 ./scripts/build-v0-desktop-releases.sh
 ```
 
+V0 通过同一个 `runtimehost` 支持 Docker Server、Electron Desktop 和无界面
+Headless CLI。三种宿主的严格模式、构建与运行命令见
+[`docs/v0-hosts.md`](docs/v0-hosts.md)。
+
 ## 最小可运行示例
 
 下面这个示例以嵌入式 worker 方式运行，不需要额外进程：
@@ -261,11 +265,13 @@ go run ./cmd/workflow-server
 - `POST /v1/workflows/{workflow_id}/versions`
 - `GET /v1/workflows/{workflow_id}/contract`
 - `POST /v1/workflows/{workflow_id}/invoke`
+- `POST /v1/workflows/{workflow_id}/invoke?wait=false`
 - `POST /v1/workflow-versions/{version_id}/publish`
 - `POST /v1/workflow-versions/{version_id}/runs`
 - `GET /v1/runs`
 - `GET /v1/runs/{id}`
 - `GET /v1/runs/{id}/events`
+- `GET /v1/runs/{id}/stream`
 - `GET /v1/runs/{id}/snapshots`
 - `POST /v1/runs/{id}/pause`
 - `POST /v1/runs/{id}/resume`

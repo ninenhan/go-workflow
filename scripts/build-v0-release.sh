@@ -126,6 +126,8 @@ for target_spec in "${validated_targets[@]}"; do
   fi
   install -m 644 "${root_directory}/docs/v0-package-readme.md" \
     "${package_directory}/README.md"
+  install -m 644 "${root_directory}/config.example.yml" \
+    "${package_directory}/config.example.yml"
   install -m 644 "${root_directory}/LICENSE" "${package_directory}/LICENSE"
 
   printf '{\n  "name": "go-workflow-v0",\n  "version": "%s",\n  "platform": "%s",\n  "architecture": "%s",\n  "source_revision": "%s",\n  "source_dirty": %s,\n  "built_at": "%s",\n  "go_version": "%s",\n  "node_version": "%s",\n  "pnpm_version": "%s",\n  "cgo_enabled": false,\n  "verification": "%s"\n}\n' \

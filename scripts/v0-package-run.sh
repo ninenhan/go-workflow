@@ -18,5 +18,16 @@ esac
 
 umask 077
 export WORKFLOW_WEB_DIR="${package_directory}/web"
-export WORKFLOW_DATA_DIR="${WORKFLOW_DATA_DIR:-"${default_data_directory}"}"
-exec "${package_directory}/bin/workflow-server" "$@"
+configuration_supplied=false
+if [[ -n "${WORKFLOW_CONFIG:-}" ]]; then
+  configuration_supplied=true
+fi
+for argument in "$@"; do
+  if [[ "${argument}" == "--config" || "${argument}" == --config=* ]]; then
+    configuration_supplied=true
+  fi
+done
+if [[ "${configuration_supplied}" == false && -z "${WORKFLOW_DATA_DIR:-}" ]]; then
+  export WORKFLOW_DATA_DIR="${default_data_directory}"
+fi
+exec "${package_directory}/bin/workflow-server" --mode=server "$@"

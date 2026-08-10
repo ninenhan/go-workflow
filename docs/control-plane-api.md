@@ -21,50 +21,70 @@ The scheduler now exposes a first-class HTTP control plane through `scheduler.Se
 4. `GET /v1/runs/{run_id}/events`
    - list run events
 
-5. `GET /v1/runs/{run_id}/snapshots`
+5. `GET /v1/runs/{run_id}/stream`
+   - stream run events and the terminal result as Server-Sent Events
+   - supports `Last-Event-ID` for reconnecting without replaying acknowledged run events
+
+6. `GET /v1/runs/{run_id}/snapshots`
    - list saved run snapshots
 
-6. `POST /v1/runs/{run_id}/pause`
+7. `POST /v1/runs/{run_id}/pause`
    - request runtime pause
 
-7. `POST /v1/runs/{run_id}/resume`
+8. `POST /v1/runs/{run_id}/resume`
    - resume a paused run
 
-8. `POST /v1/runs/{run_id}/cancel`
+9. `POST /v1/runs/{run_id}/cancel`
    - request runtime cancellation
 
-9. `GET /v1/workflows`
+10. `GET /v1/workflows`
    - list workflows
 
-10. `POST /v1/workflows`
+11. `POST /v1/workflows`
    - create or update workflow metadata
 
-11. `GET /v1/workflows/{workflow_id}`
+12. `GET /v1/workflows/{workflow_id}`
    - load workflow metadata
 
-12. `GET /v1/workflows/{workflow_id}/versions`
+13. `GET /v1/workflows/{workflow_id}/versions`
    - list versions for a workflow
 
-13. `POST /v1/workflows/{workflow_id}/versions`
+14. `POST /v1/workflows/{workflow_id}/versions`
    - create or update a workflow version
 
-14. `GET /v1/workflow-versions/{version_id}`
+15. `GET /v1/workflows/{workflow_id}/contract`
+   - load the active published API contract and its synchronous, asynchronous, and SSE URLs
+
+16. `POST /v1/workflows/{workflow_id}/invoke`
+   - invoke the active published version and return its final response
+   - add `?wait=false` to return `202 Accepted` with the run and stream URLs immediately
+
+17. `GET /v1/workflow-versions/{version_id}`
    - load a workflow version
 
-15. `POST /v1/workflow-versions/{version_id}/publish`
+18. `POST /v1/workflow-versions/{version_id}/publish`
    - publish a version and archive the previous active version
 
-16. `POST /v1/workflow-versions/{version_id}/runs`
+19. `POST /v1/workflow-versions/{version_id}/runs`
    - execute a stored workflow version
 
-17. `GET /v1/workers`
+20. `GET /v1/workers`
    - list registered workers
 
-18. `POST /v1/workers/register`
+21. `POST /v1/workers/register`
    - register a worker
 
-19. `POST /v1/workers/heartbeat`
+22. `POST /v1/workers/heartbeat`
    - update worker heartbeat
+
+## Published invocation
+
+The published control-plane invocation supports two execution modes with the same input validation and active version:
+
+- synchronous HTTP waits for completion and returns the configured `result` or `run` response
+- asynchronous HTTP uses `?wait=false`, returns `202 Accepted`, and includes `run_url`, `events_url`, and `stream_url`
+
+The SSE stream emits `ready`, zero or more `run_event` messages, and exactly one terminal `result` or `error` message before closing. Published runs use the configured response mode for the terminal payload. The terminal event has the stable ID `result`; reconnecting with that `Last-Event-ID` returns `204 No Content` and stops automatic reconnection.
 
 ## Notes
 

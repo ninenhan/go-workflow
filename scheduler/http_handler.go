@@ -3,9 +3,13 @@ package scheduler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ninenhan/go-workflow/core/credential"
 	"github.com/ninenhan/go-workflow/core/definition"
@@ -456,6 +460,15 @@ func (h *HTTPHandler) handleWorkflowResource(w http.ResponseWriter, r *http.Requ
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
+		if strings.EqualFold(r.URL.Query().Get("wait"), "false") {
+			run, err := h.Service.StartPublishedVersion(r.Context(), version, publishedRequest)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+				return
+			}
+			h.writePublishedAccepted(w, r, run)
+			return
+		}
 		run, err := h.Service.RunPublishedVersion(r.Context(), version, publishedRequest)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -485,6 +498,9 @@ func (h *HTTPHandler) handleWorkflowResource(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		contract.URL = publishedAPIURL(r, contract.Route)
+		contract.InvokeURL = publishedAPIURL(r, "/v1/workflows/"+url.PathEscape(workflowID)+"/invoke")
+		contract.AsyncURL = contract.InvokeURL + "?wait=false"
+		contract.StreamURL = publishedAPIURL(r, "/v1/runs/{run_id}/stream")
 		writeJSON(w, http.StatusOK, map[string]any{"contract": contract})
 		return
 	}
@@ -665,6 +681,12 @@ func (h *HTTPHandler) handleRunResource(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"events": events})
+	case "stream":
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+			return
+		}
+		h.handleRunStream(w, r, runID)
 	case "snapshots":
 		if r.Method != http.MethodGet {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
@@ -712,6 +734,141 @@ func (h *HTTPHandler) handleRunResource(w http.ResponseWriter, r *http.Request) 
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "resource not found"})
 	}
+}
+
+func (h *HTTPHandler) writePublishedAccepted(w http.ResponseWriter, r *http.Request, run *wfruntime.WorkflowRun) {
+	runPath := "/v1/runs/" + url.PathEscape(run.ID)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"run_id":     run.ID,
+		"status":     run.Status,
+		"source":     "publish",
+		"run_url":    publishedAPIURL(r, runPath),
+		"events_url": publishedAPIURL(r, runPath+"/events"),
+		"stream_url": publishedAPIURL(r, runPath+"/stream"),
+	})
+}
+
+func writeServerSentEvent(w io.Writer, id, event string, data any) error {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	if id != "" {
+		if _, err := fmt.Fprintf(w, "id: %s\n", id); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, payload)
+	return err
+}
+
+func parseRunStreamCursor(value string) (nextEvent int, terminalSeen bool, err error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false, nil
+	}
+	if value == "result" {
+		return 0, true, nil
+	}
+	const eventPrefix = "event:"
+	if !strings.HasPrefix(value, eventPrefix) {
+		return 0, false, errors.New("Last-Event-ID must be result or event:<number>")
+	}
+	parsed, parseErr := strconv.Atoi(strings.TrimPrefix(value, eventPrefix))
+	if parseErr != nil || parsed < 1 {
+		return 0, false, errors.New("Last-Event-ID must be result or event:<number>")
+	}
+	return parsed, false, nil
+}
+
+func (h *HTTPHandler) handleRunStream(w http.ResponseWriter, r *http.Request, runID string) {
+	run, err := h.Service.LoadRun(r.Context(), runID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "streaming is not supported"})
+		return
+	}
+	nextEvent, terminalSeen, cursorErr := parseRunStreamCursor(r.Header.Get("Last-Event-ID"))
+	if cursorErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": cursorErr.Error()})
+		return
+	}
+	if terminalSeen {
+		if !wfruntime.IsTerminal(run.Status) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "result event is not available"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	_, _ = io.WriteString(w, "retry: 1000\n\n")
+	if err := writeServerSentEvent(w, "", "ready", map[string]any{
+		"run_id": run.ID,
+		"status": run.Status,
+	}); err != nil {
+		return
+	}
+	flusher.Flush()
+
+	poll := time.NewTicker(100 * time.Millisecond)
+	defer poll.Stop()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		events, eventsErr := h.Service.RunEvents(r.Context(), runID)
+		if eventsErr != nil {
+			_ = writeServerSentEvent(w, "", "error", map[string]any{"error": eventsErr.Error()})
+			flusher.Flush()
+			return
+		}
+		for nextEvent < len(events) {
+			if err := writeServerSentEvent(w, "event:"+strconv.Itoa(nextEvent+1), "run_event", events[nextEvent]); err != nil {
+				return
+			}
+			nextEvent++
+		}
+		run, err = h.Service.LoadRun(r.Context(), runID)
+		if err != nil {
+			_ = writeServerSentEvent(w, "", "error", map[string]any{"error": err.Error()})
+			flusher.Flush()
+			return
+		}
+		if wfruntime.IsTerminal(run.Status) {
+			payload, event := h.runStreamResult(r, run)
+			_ = writeServerSentEvent(w, "result", event, payload)
+			flusher.Flush()
+			return
+		}
+		flusher.Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			_, _ = io.WriteString(w, ": keep-alive\n\n")
+			flusher.Flush()
+		case <-poll.C:
+		}
+	}
+}
+
+func (h *HTTPHandler) runStreamResult(r *http.Request, run *wfruntime.WorkflowRun) (map[string]any, string) {
+	version, err := h.Service.GetVersion(r.Context(), run.WorkflowVersionID)
+	if err == nil && version != nil && version.Definition != nil && version.Definition.PublishConfig != nil && version.Definition.PublishConfig.Enabled {
+		payload, payloadErr := publishedWorkflowPayload(version.Definition, run)
+		if payloadErr != nil {
+			return map[string]any{"error": payloadErr.Error(), "run": run, "source": "publish"}, "error"
+		}
+		return payload, "result"
+	}
+	return map[string]any{"run": run}, "result"
 }
 
 func (h *HTTPHandler) handleWorkers(w http.ResponseWriter, r *http.Request) {
