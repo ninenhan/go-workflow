@@ -27,6 +27,7 @@ type Options struct {
 	Compiler               planning.Compiler
 	Store                  wfruntime.Store
 	Definitions            definition.Repository
+	Workspace              definition.WorkspaceRepository
 	RunController          runner.RunController
 	EnableEmbeddedWorker   bool
 	EmbeddedWorker         *worker.Service
@@ -45,6 +46,7 @@ type Service struct {
 	engine           *runner.Engine
 	store            wfruntime.Store
 	definitions      definition.Repository
+	workspace        definition.WorkspaceRepository
 	controller       runner.RunController
 	workers          WorkerRegistry
 	embeddedWorker   *worker.Service
@@ -81,6 +83,10 @@ func NewService(opts Options) (*Service, error) {
 	defs := opts.Definitions
 	if defs == nil {
 		defs = definition.NewMemoryRepository()
+	}
+	workspace := opts.Workspace
+	if workspace == nil {
+		workspace = definition.NewMemoryWorkspaceRepository()
 	}
 	controller := opts.RunController
 	if controller == nil {
@@ -127,6 +133,7 @@ func NewService(opts Options) (*Service, error) {
 		engine:          engine,
 		store:           store,
 		definitions:     defs,
+		workspace:       workspace,
 		controller:      controller,
 		workers:         workers,
 		embeddedWorker:  embeddedWorker,
@@ -392,6 +399,20 @@ func (s *Service) ListWorkflows(ctx context.Context) ([]*definition.Workflow, er
 		return nil, errors.New("definition repository is not configured")
 	}
 	return s.definitions.ListWorkflows(ctx)
+}
+
+func (s *Service) GetWorkspace(ctx context.Context) (*definition.Workspace, error) {
+	if s == nil || s.workspace == nil {
+		return nil, errors.New("workspace repository is not configured")
+	}
+	return s.workspace.GetWorkspace(ctx)
+}
+
+func (s *Service) SaveWorkspace(ctx context.Context, workspace *definition.Workspace, expectedRevision uint64) (*definition.Workspace, error) {
+	if s == nil || s.workspace == nil {
+		return nil, errors.New("workspace repository is not configured")
+	}
+	return s.workspace.SaveWorkspace(ctx, workspace, expectedRevision)
 }
 
 func (s *Service) CreateVersion(ctx context.Context, workflowID string, workflowDefinition *definition.WorkflowDefinition) (*definition.WorkflowVersion, error) {

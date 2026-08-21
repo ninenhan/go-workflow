@@ -42,7 +42,12 @@ and unknown or published routes are never converted into an HTML fallback.
 The default runtime directory is `.go-workflow-data` and contains:
 
 - `workflow.db` for definitions, runs, events, snapshots, and automations
+- the authoritative editable workspace, including drafts, folders, layouts, and services
 - `credentials/` for the encrypted credential store
+
+The workspace and executable schema ownership rules, revision conflicts, and
+one-time browser migration are documented in
+[`workspace-contract.md`](workspace-contract.md).
 
 Use `WORKFLOW_DATA_DIR` to select another private data directory and
 `WORKFLOW_ADDR` to change the listen address. The server rejects an insecure

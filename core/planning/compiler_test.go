@@ -19,7 +19,7 @@ func TestCompilerCompile(t *testing.T) {
 			ID:   "wf-1",
 			Name: "demo",
 			Nodes: []definition.Node{
-				{ID: "start", Name: "start", Executor: definition.ExecutorSpec{Type: definition.ExecutorTypeLocalGo, Ref: "start.fn"}, Retry: definition.RetryPolicy{MaxAttempts: 1}},
+				{ID: "start", Name: "start", Executor: definition.ExecutorSpec{Type: definition.ExecutorTypeLocalGo, Ref: "start.fn"}, Retry: &definition.RetryPolicy{MaxAttempts: 1}},
 				{ID: "end", Name: "end", Executor: definition.ExecutorSpec{Type: definition.ExecutorTypeLocalGo, Ref: "end.fn"}, Timeout: time.Second},
 			},
 			Edges: []definition.Edge{{From: "start", To: "end"}},
@@ -107,7 +107,7 @@ func TestCompilerCompileValidatesRetryPolicyBounds(t *testing.T) {
 					Nodes: []definition.Node{{
 						ID:       "request",
 						Executor: definition.ExecutorSpec{Type: definition.ExecutorTypeUnit, Ref: "HttpUnit"},
-						Retry:    test.policy,
+						Retry:    &test.policy,
 					}},
 				},
 			})

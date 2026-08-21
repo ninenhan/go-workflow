@@ -61,6 +61,10 @@ func (c *DefaultCompiler) Compile(version *definition.WorkflowVersion) (*Executi
 		if node.Disabled {
 			continue
 		}
+		retry := RetryPolicy{}
+		if node.Retry != nil {
+			retry = RetryPolicy(*node.Retry)
+		}
 		planNode := PlanNode{
 			ID:              node.ID,
 			Name:            node.Name,
@@ -73,7 +77,7 @@ func (c *DefaultCompiler) Compile(version *definition.WorkflowVersion) (*Executi
 			Params:          cloneMap(node.Params),
 			ParamBindings:   cloneParamBindings(node.ParamBindings),
 			ParamTemplates:  cloneParamTemplates(node.ParamTemplates),
-			Retry:           RetryPolicy(node.Retry),
+			Retry:           retry,
 			Loop:            cloneLoop(node.Loop),
 			Timeout:         node.Timeout,
 			ContinueOnError: boolFromMap(node.Params, "continue_on_error"),
@@ -660,17 +664,19 @@ func validateDefinition(def *definition.WorkflowDefinition) error {
 		if node.Executor.Type == "" {
 			return fmt.Errorf("node %s missing executor type", node.ID)
 		}
-		if node.Retry.MaxAttempts < 0 || node.Retry.MaxAttempts > MaxNodeRetryAttempts {
-			return fmt.Errorf("node %s retry max_attempts must be between 0 and %d", node.ID, MaxNodeRetryAttempts)
-		}
-		if node.Retry.Backoff < 0 || node.Retry.Backoff > MaxNodeRetryBackoff {
-			return fmt.Errorf("node %s retry backoff must be between 0 and %s", node.ID, MaxNodeRetryBackoff)
-		}
-		if node.Retry.MaxBackoff < 0 || node.Retry.MaxBackoff > MaxNodeRetryBackoff {
-			return fmt.Errorf("node %s retry max_backoff must be between 0 and %s", node.ID, MaxNodeRetryBackoff)
-		}
-		if node.Retry.Backoff > 0 && node.Retry.MaxBackoff > 0 && node.Retry.MaxBackoff < node.Retry.Backoff {
-			return fmt.Errorf("node %s retry max_backoff cannot be less than backoff", node.ID)
+		if node.Retry != nil {
+			if node.Retry.MaxAttempts < 0 || node.Retry.MaxAttempts > MaxNodeRetryAttempts {
+				return fmt.Errorf("node %s retry max_attempts must be between 0 and %d", node.ID, MaxNodeRetryAttempts)
+			}
+			if node.Retry.Backoff < 0 || node.Retry.Backoff > MaxNodeRetryBackoff {
+				return fmt.Errorf("node %s retry backoff must be between 0 and %s", node.ID, MaxNodeRetryBackoff)
+			}
+			if node.Retry.MaxBackoff < 0 || node.Retry.MaxBackoff > MaxNodeRetryBackoff {
+				return fmt.Errorf("node %s retry max_backoff must be between 0 and %s", node.ID, MaxNodeRetryBackoff)
+			}
+			if node.Retry.Backoff > 0 && node.Retry.MaxBackoff > 0 && node.Retry.MaxBackoff < node.Retry.Backoff {
+				return fmt.Errorf("node %s retry max_backoff cannot be less than backoff", node.ID)
+			}
 		}
 		if node.Loop != nil {
 			mode := strings.TrimSpace(node.Loop.Mode)

@@ -70,7 +70,7 @@ type Node struct {
 	ParamBindings  map[string]InputBinding  `json:"param_bindings,omitempty"`
 	ParamTemplates map[string]ParamTemplate `json:"param_templates,omitempty"`
 	DependsOn      []string                 `json:"depends_on,omitempty"`
-	Retry          RetryPolicy              `json:"retry,omitempty"`
+	Retry          *RetryPolicy             `json:"retry,omitempty"`
 	Loop           *LoopPolicy              `json:"loop,omitempty"`
 	Timeout        time.Duration            `json:"timeout,omitempty"`
 	Branch         *BranchPolicy            `json:"branch,omitempty"`

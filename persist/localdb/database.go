@@ -19,6 +19,7 @@ import (
 
 type Database struct {
 	Definitions *definition.GormRepository
+	Workspace   *definition.GormWorkspaceRepository
 	Runtime     *wfruntime.GormStore
 	Automations *scheduler.GormAutomationStore
 	db          *gorm.DB
@@ -89,6 +90,10 @@ func Open(path string) (*Database, error) {
 	if err != nil {
 		return closeOnError(err)
 	}
+	workspace, err := definition.NewGormWorkspaceRepository(db)
+	if err != nil {
+		return closeOnError(err)
+	}
 	runtimeStore, err := wfruntime.NewGormStore(db)
 	if err != nil {
 		return closeOnError(err)
@@ -102,6 +107,7 @@ func Open(path string) (*Database, error) {
 	}
 	return &Database{
 		Definitions: definitions,
+		Workspace:   workspace,
 		Runtime:     runtimeStore,
 		Automations: automationStore,
 		db:          db,

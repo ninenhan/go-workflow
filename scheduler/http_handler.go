@@ -22,6 +22,7 @@ const CredentialScopeHeader = "X-Workflow-Credential-Scope"
 
 const maxCredentialPayloadBytes = credential.MaxBatchSize*credential.MaxValueBytes + 64<<10
 const maxRunPayloadBytes int64 = 16 << 20
+const maxWorkspacePayloadBytes int64 = 32 << 20
 
 type RunRequest struct {
 	Definition *definition.WorkflowDefinition `json:"definition,omitempty"`
@@ -50,6 +51,8 @@ func (h *HTTPHandler) Handler() http.Handler {
 	mux.HandleFunc("/v1/validate", h.handleValidate)
 	mux.HandleFunc("/v1/workflows", h.handleWorkflows)
 	mux.HandleFunc("/v1/workflows/", h.handleWorkflowResource)
+	mux.HandleFunc("/v1/workspace", h.handleWorkspace)
+	mux.HandleFunc("/v1/schema/workflow-definition", h.handleWorkflowDefinitionSchema)
 	mux.HandleFunc("/v1/workflow-versions/", h.handleWorkflowVersionResource)
 	mux.HandleFunc("/v1/credentials", h.handleCredentials)
 	mux.HandleFunc("/v1/credentials/", h.handleCredentialResource)
@@ -110,17 +113,12 @@ func (h *HTTPHandler) handleRunCreate(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxRunPayloadBytes)
 	var req RunRequest
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&req); err != nil {
+	if err := decodeStrictJSON(r.Body, &req); err != nil {
 		var maxBytesError *http.MaxBytesError
 		if errors.As(err, &maxBytesError) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "run payload is too large"})
 			return
 		}
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
 		return
 	}
@@ -345,7 +343,7 @@ func (h *HTTPHandler) handleValidate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req RunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeStrictJSON(r.Body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
 		return
 	}
@@ -379,6 +377,76 @@ func (h *HTTPHandler) handleValidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *HTTPHandler) handleWorkspace(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.Service == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "scheduler service not configured"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		workspace, err := h.Service.GetWorkspace(r.Context())
+		if err != nil {
+			if errors.Is(err, definition.ErrWorkspaceNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"workspace": workspace})
+	case http.MethodPut:
+		r.Body = http.MaxBytesReader(w, r.Body, maxWorkspacePayloadBytes)
+		var workspace definition.Workspace
+		if err := decodeStrictJSON(r.Body, &workspace); err != nil {
+			var maxBytesError *http.MaxBytesError
+			if errors.As(err, &maxBytesError) {
+				writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "workspace payload is too large"})
+				return
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		saved, err := h.Service.SaveWorkspace(r.Context(), &workspace, workspace.Revision)
+		if err != nil {
+			if errors.Is(err, definition.ErrWorkspaceConflict) {
+				writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"workspace": saved})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+func (h *HTTPHandler) handleWorkflowDefinitionSchema(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"contract_version": definition.WorkflowContractVersion,
+		"schema":           definition.WorkflowDefinitionJSONSchema(),
+	})
+}
+
+func decodeStrictJSON(reader io.Reader, target any) error {
+	decoder := json.NewDecoder(reader)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("request contains trailing json")
+		}
+		return err
+	}
+	return nil
+}
+
 func (h *HTTPHandler) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	if h == nil || h.Service == nil {
 		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "scheduler service not configured"})
@@ -394,7 +462,7 @@ func (h *HTTPHandler) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"workflows": workflows})
 	case http.MethodPost:
 		var workflow definition.Workflow
-		if err := json.NewDecoder(r.Body).Decode(&workflow); err != nil {
+		if err := decodeStrictJSON(r.Body, &workflow); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
 			return
 		}
@@ -521,7 +589,7 @@ func (h *HTTPHandler) handleWorkflowResource(w http.ResponseWriter, r *http.Requ
 			Version    *definition.WorkflowVersion    `json:"version,omitempty"`
 			Definition *definition.WorkflowDefinition `json:"definition,omitempty"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeStrictJSON(r.Body, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
 			return
 		}

@@ -132,6 +132,7 @@ func Run(ctx context.Context, config Config, logger *log.Logger) error {
 		EnableEmbeddedWorker:   !config.DisableEmbeddedWorker,
 		Store:                  database.Runtime,
 		Definitions:            database.Definitions,
+		Workspace:              database.Workspace,
 		Automations:            database.Automations,
 		Credentials:            credentialStore,
 		DefaultCredentialScope: config.DefaultScope,
