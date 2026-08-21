@@ -18,7 +18,7 @@ import (
 	"github.com/ninenhan/go-workflow/core/credential"
 	"github.com/ninenhan/go-workflow/persist/localdb"
 	"github.com/ninenhan/go-workflow/scheduler"
-	workerunit "github.com/ninenhan/go-workflow/worker/unit"
+	"github.com/ninenhan/go-workflow/units"
 )
 
 type Mode string
@@ -302,7 +302,7 @@ func WriteRuntimeUnits(destination io.Writer) error {
 	if destination == nil {
 		return errors.New("runtime unit destination is nil")
 	}
-	return json.NewEncoder(destination).Encode(workerunit.DefaultRegistry.Names())
+	return json.NewEncoder(destination).Encode(units.BuiltinNames())
 }
 
 func writeJSON(response http.ResponseWriter, status int, payload any) {

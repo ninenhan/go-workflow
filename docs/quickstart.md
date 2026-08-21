@@ -83,11 +83,13 @@ func main() {
 		panic(err)
 	}
 
-	workerSvc.UnitRegistry().RegisterUnitFactory("GreetingUnit", func() workerunit.ExecutableUnit {
+	if err := workerSvc.UnitRegistry().RegisterUnitFactory("GreetingUnit", func() workerunit.ExecutableUnit {
 		unit := &GreetingUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit
-	})
+	}); err != nil {
+		panic(err)
+	}
 
 	svc, err := scheduler.NewService(scheduler.Options{
 		EnableEmbeddedWorker: true,
@@ -321,11 +323,13 @@ func (u *MyUnit) Execute(ctx context.Context, state workerunit.ContextMap, self 
 注册方式：
 
 ```go
-workerSvc.UnitRegistry().RegisterUnitFactory("MyUnit", func() workerunit.ExecutableUnit {
+if err := workerSvc.UnitRegistry().RegisterUnitFactory("MyUnit", func() workerunit.ExecutableUnit {
 	unit := &MyUnit{}
 	unit.UnitName = unit.GetUnitName()
 	return unit
-})
+}); err != nil {
+	return err
+}
 ```
 
 然后 workflow 里这样写：

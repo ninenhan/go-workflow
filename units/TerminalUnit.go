@@ -70,11 +70,3 @@ func NewTerminalUnit() TerminalUnit {
 	unit.UnitName = unit.GetUnitName()
 	return unit
 }
-
-func init() {
-	unit.RegisterUnitFactory("TerminalUnit", func() unit.ExecutableUnit {
-		unit := &TerminalUnit{}
-		unit.UnitName = unit.GetUnitName()
-		return unit
-	})
-}

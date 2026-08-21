@@ -380,11 +380,3 @@ func limitBody(s string, limit int) string {
 	}
 	return s[:limit] + "...(truncated)"
 }
-
-func init() {
-	unit.RegisterUnitFactory("LLMUnit", func() unit.ExecutableUnit {
-		u := &LLMUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

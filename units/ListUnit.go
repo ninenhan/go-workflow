@@ -61,11 +61,3 @@ func NewListUnit() ListUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("ListUnit", func() unit.ExecutableUnit {
-		u := &ListUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

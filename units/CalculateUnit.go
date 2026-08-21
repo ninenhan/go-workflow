@@ -126,11 +126,3 @@ func NewCalculateUnit() CalculateUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("CalculateUnit", func() unit.ExecutableUnit {
-		u := &CalculateUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

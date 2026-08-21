@@ -1,10 +1,13 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
 )
+
+var ErrAlreadyRegistered = errors.New("executor already registered")
 
 type Registry struct {
 	mu        sync.RWMutex
@@ -16,6 +19,51 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(exec Executor) error {
+	return r.RegisterAll(exec)
+}
+
+// RegisterAll validates the complete batch before changing the registry. This
+// prevents a partially installed executor set when one item conflicts.
+func (r *Registry) RegisterAll(executors ...Executor) error {
+	if r == nil {
+		return fmt.Errorf("executor registry is nil")
+	}
+	batch := make(map[Type]Executor, len(executors))
+	for _, exec := range executors {
+		if exec == nil {
+			return fmt.Errorf("executor is nil")
+		}
+		t := exec.Type()
+		if t == "" {
+			return fmt.Errorf("executor type is empty")
+		}
+		if _, exists := batch[t]; exists {
+			return fmt.Errorf("%w in batch: %s", ErrAlreadyRegistered, t)
+		}
+		batch[t] = exec
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.executors == nil {
+		r.executors = make(map[Type]Executor)
+	}
+	for t := range batch {
+		if _, exists := r.executors[t]; exists {
+			return fmt.Errorf("%w: %s", ErrAlreadyRegistered, t)
+		}
+	}
+	for t, exec := range batch {
+		r.executors[t] = exec
+	}
+	return nil
+}
+
+// RegisterOrReplace makes replacement an explicit operation. Prefer Register
+// during normal composition so accidental type collisions fail fast.
+func (r *Registry) RegisterOrReplace(exec Executor) error {
+	if r == nil {
+		return fmt.Errorf("executor registry is nil")
+	}
 	if exec == nil {
 		return fmt.Errorf("executor is nil")
 	}
@@ -25,6 +73,9 @@ func (r *Registry) Register(exec Executor) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.executors == nil {
+		r.executors = make(map[Type]Executor)
+	}
 	r.executors[t] = exec
 	return nil
 }

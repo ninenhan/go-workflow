@@ -69,21 +69,3 @@ func (u *GotoUnit) Execute(ctx context.Context, state unit.ContextMap, self *uni
 func (u *GotoUnit) GetUnitMeta() *unit.Unit {
 	return &u.Unit
 }
-
-func init() {
-	unit.RegisterUnitFactory("BreakUnit", func() unit.ExecutableUnit {
-		unit := &BreakUnit{}
-		unit.UnitName = unit.GetUnitName()
-		return unit
-	})
-	unit.RegisterUnitFactory("ContinueUnit", func() unit.ExecutableUnit {
-		unit := &ContinueUnit{}
-		unit.UnitName = unit.GetUnitName()
-		return unit
-	})
-	unit.RegisterUnitFactory("GotoUnit", func() unit.ExecutableUnit {
-		unit := &GotoUnit{}
-		unit.UnitName = unit.GetUnitName()
-		return unit
-	})
-}

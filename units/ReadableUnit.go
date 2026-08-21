@@ -120,11 +120,3 @@ func NewReadableUnit() ReadableUnit {
 	action.UnitName = action.GetUnitName()
 	return action
 }
-
-func init() {
-	unit.RegisterUnitFactory("ReadableUnit", func() unit.ExecutableUnit {
-		action := &ReadableUnit{Format: "text"}
-		action.UnitName = action.GetUnitName()
-		return action
-	})
-}

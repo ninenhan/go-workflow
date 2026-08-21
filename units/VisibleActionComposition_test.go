@@ -201,7 +201,7 @@ func TestVisibleActionsComposeAcrossDeclaredValueKinds(t *testing.T) {
 		},
 	}
 
-	executor := workerunit.NewExecutor(nil)
+	executor := newBuiltinUnitExecutor(t)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			sourceOutput := executeCompositionStep(t, executor, test.name+"-source", test.source)

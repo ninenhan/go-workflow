@@ -72,11 +72,3 @@ func NewTimeoutUnit() TimeoutUnit {
 	unit.UnitName = unit.GetUnitName()
 	return unit
 }
-
-func init() {
-	unit.RegisterUnitFactory("TimeoutUnit", func() unit.ExecutableUnit {
-		unit := &TimeoutUnit{}
-		unit.UnitName = unit.GetUnitName()
-		return unit
-	})
-}

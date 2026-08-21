@@ -105,11 +105,3 @@ func NewScriptUnit(script string) ScriptUnit {
 	unit.UnitName = unit.GetUnitName()
 	return unit
 }
-
-func init() {
-	unit.RegisterUnitFactory("ScriptUnit", func() unit.ExecutableUnit {
-		unit := &ScriptUnit{Language: "javascript"}
-		unit.UnitName = unit.GetUnitName()
-		return unit
-	})
-}

@@ -7,7 +7,7 @@ import (
 	"github.com/ninenhan/go-workflow/core/credential"
 	"github.com/ninenhan/go-workflow/core/executor"
 	"github.com/ninenhan/go-workflow/core/workerproto"
-	_ "github.com/ninenhan/go-workflow/units"
+	"github.com/ninenhan/go-workflow/units"
 	workerunit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
@@ -40,7 +40,9 @@ func NewService(opts Options) (*Service, error) {
 		credentials:  opts.CredentialResolver,
 	}
 	if svc.unitRegistry == nil {
-		svc.unitRegistry = workerunit.DefaultRegistry
+		// Clone legacy global registrations once for compatibility, then keep all
+		// service mutations isolated.
+		svc.unitRegistry = workerunit.DefaultRegistry.Clone()
 	}
 	if svc.credentials == nil {
 		svc.credentials = credential.EnvironmentResolver{}
@@ -49,6 +51,9 @@ func NewService(opts Options) (*Service, error) {
 		return svc, nil
 	}
 	if opts.RegisterBuiltins {
+		if err := units.RegisterBuiltins(svc.unitRegistry); err != nil {
+			return nil, err
+		}
 		if err := svc.registerBuiltins(); err != nil {
 			return nil, err
 		}
@@ -113,12 +118,7 @@ func (s *Service) registerBuiltins() error {
 		workerunit.NewExecutorWithCredentials(s.unitRegistry, s.credentials),
 		&executor.ContainerExecutor{},
 	}
-	for _, exec := range builtins {
-		if err := s.registry.Register(exec); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.registry.RegisterAll(builtins...)
 }
 
 func appendIfMissing(items []string, value string) []string {

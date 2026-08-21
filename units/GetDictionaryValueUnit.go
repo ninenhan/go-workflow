@@ -75,11 +75,3 @@ func NewGetDictionaryValueUnit() GetDictionaryValueUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("GetDictionaryValueUnit", func() unit.ExecutableUnit {
-		u := &GetDictionaryValueUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

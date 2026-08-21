@@ -838,11 +838,3 @@ func NewHttpUnit() HttpUnit {
 	unit.UnitName = unit.GetUnitName()
 	return unit
 }
-
-func init() {
-	unit.RegisterUnitFactory("HttpUnit", func() unit.ExecutableUnit {
-		unit := &HttpUnit{}
-		unit.UnitName = unit.GetUnitName()
-		return unit
-	})
-}

@@ -112,11 +112,3 @@ func NewCountUnit() CountUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("CountUnit", func() unit.ExecutableUnit {
-		u := &CountUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

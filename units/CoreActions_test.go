@@ -635,7 +635,7 @@ func TestTerminalUnitResponseModes(t *testing.T) {
 }
 
 func TestPassThroughUnitsPreserveRegisteredRuntimeName(t *testing.T) {
-	executor := unit.NewExecutor(nil)
+	executor := newBuiltinUnitExecutor(t)
 	for _, name := range []string{"IfUnit", "LogicUnit", "LogUnit", "RemarkUnit"} {
 		t.Run(name, func(t *testing.T) {
 			result, err := executor.Execute(context.Background(), coreexecutor.ExecuteTask{
@@ -689,8 +689,12 @@ var userVisibleRuntimeUnitNames = []string{
 }
 
 func TestUserVisibleRuntimeUnitsAreRegistered(t *testing.T) {
+	registry := unit.NewRegistry()
+	if err := RegisterBuiltins(registry); err != nil {
+		t.Fatalf("register builtins: %v", err)
+	}
 	for _, name := range userVisibleRuntimeUnitNames {
-		if _, registered := unit.Find(name); !registered {
+		if _, registered := registry.New(name); !registered {
 			t.Errorf("%s is not registered", name)
 		}
 	}

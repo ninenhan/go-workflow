@@ -143,16 +143,3 @@ func NewCombineTextUnit() CombineTextUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("SplitTextUnit", func() unit.ExecutableUnit {
-		u := &SplitTextUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-	unit.RegisterUnitFactory("CombineTextUnit", func() unit.ExecutableUnit {
-		u := &CombineTextUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

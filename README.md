@@ -23,6 +23,10 @@
 - 分支条件、节点级 loop、显式 back-edge
 - 内存 store 和 Gorm store
 
+作为 Go 核心库嵌入时的包边界、注册所有权和兼容策略见
+[`docs/library-contract.md`](docs/library-contract.md)。完整的依赖引入、自定义 Unit、
+工作流创建运行和持久化示例见 [`docs/embedding-guide.md`](docs/embedding-guide.md)。
+
 Web 编辑器可以把 OpenAPI 3.0/3.1 JSON/YAML 中受支持的操作批量安装为可复用服务。普通用户
 只看到自动生成的选择项和运行表单；multipart 文件在每次运行时选择，不会保存到服务配置。
 源文档仅用于开发者导入与审查。支持边界、凭据规则和运行时安全校验见
@@ -125,11 +129,13 @@ func main() {
 		panic(err)
 	}
 
-	workerSvc.UnitRegistry().RegisterUnitFactory("GreetingUnit", func() workerunit.ExecutableUnit {
+	if err := workerSvc.UnitRegistry().RegisterUnitFactory("GreetingUnit", func() workerunit.ExecutableUnit {
 		unit := &GreetingUnit{}
 		unit.UnitName = unit.GetUnitName()
 		return unit
-	})
+	}); err != nil {
+		panic(err)
+	}
 
 	svc, err := scheduler.NewService(scheduler.Options{
 		EnableEmbeddedWorker: true,

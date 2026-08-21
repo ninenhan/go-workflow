@@ -47,9 +47,3 @@ func logicAliasFactory(name string) unit.Factory {
 		return &action
 	}
 }
-
-func init() {
-	unit.RegisterUnitFactory("IfUnit", logicAliasFactory("IfUnit"))
-	unit.RegisterUnitFactory("LogicUnit", logicAliasFactory("LogicUnit"))
-	unit.RegisterUnitFactory("LogUnit", logicAliasFactory("LogUnit"))
-}

@@ -88,11 +88,3 @@ func NewDateUnit() DateUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("DateUnit", func() unit.ExecutableUnit {
-		u := &DateUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

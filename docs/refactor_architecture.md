@@ -30,10 +30,14 @@
    - embedded or standalone data plane
    - owns built-in executors and unit execution
 3. `units`
-   - built-in standard units, registered into `worker/unit.DefaultRegistry`
+   - built-in standard units and their explicit catalog
+   - registered into a worker-owned `worker/unit.Registry` during composition
 
 ## Notes
 
 - The old root-package workflow runtime has been removed.
 - `WhileUnit` was removed with the legacy runtime because its nested subworkflow semantics depended on the old engine.
 - New work should target `core`, `scheduler`, `worker`, and `worker/unit` only.
+- Runtime services do not share a mutable unit registry. `worker.NewService` clones legacy global registrations once, then owns the clone.
+- Built-in unit installation is explicit through `units.RegisterBuiltins`; importing `units` has no registration side effects.
+- Executor and unit registration rejects duplicates. Intentional hot replacement must use `RegisterOrReplace`.

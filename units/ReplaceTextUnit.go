@@ -110,11 +110,3 @@ func NewReplaceTextUnit() ReplaceTextUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("ReplaceTextUnit", func() unit.ExecutableUnit {
-		u := &ReplaceTextUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

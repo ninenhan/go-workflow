@@ -91,11 +91,3 @@ func NewChooseFromMenuUnit() ChooseFromMenuUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("ChooseFromMenuUnit", func() unit.ExecutableUnit {
-		u := &ChooseFromMenuUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

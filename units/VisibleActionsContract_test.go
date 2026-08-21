@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	coreexecutor "github.com/ninenhan/go-workflow/core/executor"
-	workerunit "github.com/ninenhan/go-workflow/worker/unit"
 )
 
 type visibleActionContract struct {
@@ -253,7 +252,7 @@ func TestUserVisibleRuntimeUnitsExecuteThroughWorkerContract(t *testing.T) {
 		t.Fatalf("visible action contracts = %d, runtime actions = %d", len(covered), len(userVisibleRuntimeUnitNames))
 	}
 
-	executor := workerunit.NewExecutor(nil)
+	executor := newBuiltinUnitExecutor(t)
 	for _, contract := range contracts {
 		t.Run(contract.name, func(t *testing.T) {
 			result, err := executor.Execute(context.Background(), coreexecutor.ExecuteTask{

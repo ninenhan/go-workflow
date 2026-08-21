@@ -61,11 +61,3 @@ func NewFormatDateUnit() FormatDateUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("FormatDateUnit", func() unit.ExecutableUnit {
-		u := &FormatDateUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

@@ -36,11 +36,3 @@ func NewRemarkUnit() RemarkUnit {
 	unit.UnitName = unit.GetUnitName()
 	return unit
 }
-
-func init() {
-	unit.RegisterUnitFactory("RemarkUnit", func() unit.ExecutableUnit {
-		unit := &RemarkUnit{}
-		unit.UnitName = unit.GetUnitName()
-		return unit
-	})
-}

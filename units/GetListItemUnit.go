@@ -113,11 +113,3 @@ func NewGetListItemUnit() GetListItemUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("GetListItemUnit", func() unit.ExecutableUnit {
-		u := &GetListItemUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

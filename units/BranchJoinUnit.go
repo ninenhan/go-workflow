@@ -57,11 +57,3 @@ func (u *BranchJoinUnit) Execute(_ context.Context, _ unit.ContextMap, self *uni
 func (u *BranchJoinUnit) GetUnitMeta() *unit.Unit {
 	return &u.Unit
 }
-
-func init() {
-	unit.RegisterUnitFactory("BranchJoinUnit", func() unit.ExecutableUnit {
-		u := &BranchJoinUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

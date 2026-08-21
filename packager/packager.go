@@ -16,8 +16,7 @@ import (
 	"github.com/ninenhan/go-workflow/core/definition"
 	"github.com/ninenhan/go-workflow/core/executor"
 	"github.com/ninenhan/go-workflow/scheduler"
-	_ "github.com/ninenhan/go-workflow/units"
-	workerunit "github.com/ninenhan/go-workflow/worker/unit"
+	"github.com/ninenhan/go-workflow/units"
 )
 
 func LoadDefinition(path string) (*definition.WorkflowDefinition, error) {
@@ -140,7 +139,7 @@ func FindModuleRoot(start string) (string, error) {
 }
 
 func builtinUnits() map[string]struct{} {
-	names := workerunit.DefaultRegistry.Names()
+	names := units.BuiltinNames()
 	set := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		set[name] = struct{}{}

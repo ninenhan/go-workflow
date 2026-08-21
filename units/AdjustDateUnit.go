@@ -125,11 +125,3 @@ func NewAdjustDateUnit() AdjustDateUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("AdjustDateUnit", func() unit.ExecutableUnit {
-		u := &AdjustDateUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

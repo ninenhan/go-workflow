@@ -787,11 +787,3 @@ func NewOpenAPIOperationUnit() OpenAPIOperationUnit {
 	action.UnitName = action.GetUnitName()
 	return action
 }
-
-func init() {
-	unit.RegisterUnitFactory("OpenAPIOperationUnit", func() unit.ExecutableUnit {
-		action := &OpenAPIOperationUnit{}
-		action.UnitName = action.GetUnitName()
-		return action
-	})
-}

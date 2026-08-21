@@ -59,11 +59,3 @@ func NewTextUnit() TextUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("TextUnit", func() unit.ExecutableUnit {
-		u := &TextUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

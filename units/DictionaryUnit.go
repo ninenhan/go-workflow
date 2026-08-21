@@ -114,11 +114,3 @@ func NewDictionaryUnit() DictionaryUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("DictionaryUnit", func() unit.ExecutableUnit {
-		u := &DictionaryUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

@@ -159,11 +159,3 @@ func NewSetEnvUnit() SetEnvUnit {
 	unit.UnitName = unit.GetUnitName()
 	return unit
 }
-
-func init() {
-	unit.RegisterUnitFactory("SetEnvUnit", func() unit.ExecutableUnit {
-		unit := &SetEnvUnit{}
-		unit.UnitName = unit.GetUnitName()
-		return unit
-	})
-}

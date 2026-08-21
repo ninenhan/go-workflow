@@ -98,11 +98,3 @@ func NewChangeCaseUnit() ChangeCaseUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("ChangeCaseUnit", func() unit.ExecutableUnit {
-		u := &ChangeCaseUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}

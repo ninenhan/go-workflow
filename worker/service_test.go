@@ -12,7 +12,18 @@ import (
 	"github.com/ninenhan/go-workflow/core/workerproto"
 	"github.com/ninenhan/go-workflow/scheduler"
 	"github.com/ninenhan/go-workflow/worker"
+	workerunit "github.com/ninenhan/go-workflow/worker/unit"
 )
+
+type serviceTestUnit struct {
+	workerunit.Unit
+}
+
+func (u *serviceTestUnit) GetUnitMeta() *workerunit.Unit { return &u.Unit }
+
+func (u *serviceTestUnit) Execute(context.Context, workerunit.ContextMap, *workerunit.Node) (*workerunit.ExecutionResult, error) {
+	return workerunit.SimpleResult("ok"), nil
+}
 
 func TestNewServiceDisabled(t *testing.T) {
 	svc, err := worker.NewService(worker.Options{
@@ -78,6 +89,28 @@ func TestServiceDescriptorIncludesExecutorsAndUnits(t *testing.T) {
 	}
 	if len(desc.SupportedExecutorRefs) == 0 {
 		t.Fatalf("expected unit refs")
+	}
+}
+
+func TestServicesUseIsolatedUnitRegistries(t *testing.T) {
+	first, err := worker.NewService(worker.Options{Enabled: true, RegisterBuiltins: true})
+	if err != nil {
+		t.Fatalf("new first service: %v", err)
+	}
+	second, err := worker.NewService(worker.Options{Enabled: true, RegisterBuiltins: true})
+	if err != nil {
+		t.Fatalf("new second service: %v", err)
+	}
+	if first.UnitRegistry() == second.UnitRegistry() {
+		t.Fatal("services share a unit registry")
+	}
+	if err := first.UnitRegistry().RegisterUnitFactory("ServiceOnlyUnit", func() workerunit.ExecutableUnit {
+		return &serviceTestUnit{}
+	}); err != nil {
+		t.Fatalf("register custom unit: %v", err)
+	}
+	if _, exists := second.UnitRegistry().New("ServiceOnlyUnit"); exists {
+		t.Fatal("custom unit leaked into another service")
 	}
 }
 

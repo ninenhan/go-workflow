@@ -117,11 +117,3 @@ func NewAskForInputUnit() AskForInputUnit {
 	u.UnitName = u.GetUnitName()
 	return u
 }
-
-func init() {
-	unit.RegisterUnitFactory("AskForInputUnit", func() unit.ExecutableUnit {
-		u := &AskForInputUnit{}
-		u.UnitName = u.GetUnitName()
-		return u
-	})
-}
