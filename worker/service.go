@@ -116,7 +116,6 @@ func (s *Service) registerBuiltins() error {
 		executor.NewHTTPExecutor(nil),
 		executor.NewScriptExecutor(),
 		workerunit.NewExecutorWithCredentials(s.unitRegistry, s.credentials),
-		&executor.ContainerExecutor{},
 	}
 	return s.registry.RegisterAll(builtins...)
 }

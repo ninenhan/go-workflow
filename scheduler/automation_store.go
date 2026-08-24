@@ -64,6 +64,10 @@ type automationScheduleRecord struct {
 
 func (automationScheduleRecord) TableName() string { return "workflow_automation_schedules" }
 
+// NewGormAutomationStore constructs the legacy standalone automation adapter.
+//
+// Deprecated: new applications should compose the complete adapter through
+// persist/gormstore.New. This constructor remains available for compatibility.
 func NewGormAutomationStore(db *gorm.DB) (*GormAutomationStore, error) {
 	if db == nil {
 		return nil, errors.New("gorm db is nil")

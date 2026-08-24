@@ -42,6 +42,10 @@ type workflowVersionRecord struct {
 
 func (workflowVersionRecord) TableName() string { return "workflow_versions" }
 
+// NewGormRepository constructs the legacy standalone definition adapter.
+//
+// Deprecated: new applications should compose the complete adapter through
+// persist/gormstore.New. This constructor remains available for compatibility.
 func NewGormRepository(db *gorm.DB) (*GormRepository, error) {
 	if db == nil {
 		return nil, errors.New("gorm db is nil")

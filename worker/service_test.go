@@ -64,6 +64,9 @@ func TestNewServiceWithBuiltins(t *testing.T) {
 	if _, ok := svc.Registry().Get(executor.TypeUnit); !ok {
 		t.Fatalf("missing unit executor")
 	}
+	if _, ok := svc.Registry().Get(executor.TypeContainer); ok {
+		t.Fatalf("unimplemented container executor must not be advertised as a builtin")
+	}
 }
 
 func TestServiceDescriptorIncludesExecutorsAndUnits(t *testing.T) {

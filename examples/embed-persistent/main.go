@@ -6,13 +6,10 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"time"
 
-	"github.com/ninenhan/go-workflow/core/credential"
+	workflow "github.com/ninenhan/go-workflow"
 	"github.com/ninenhan/go-workflow/core/definition"
 	wfruntime "github.com/ninenhan/go-workflow/core/runtime"
-	"github.com/ninenhan/go-workflow/persist/localdb"
-	"github.com/ninenhan/go-workflow/scheduler"
 	"github.com/ninenhan/go-workflow/worker"
 	workerunit "github.com/ninenhan/go-workflow/worker/unit"
 )
@@ -47,51 +44,22 @@ func run() (runErr error) {
 	ctx := context.Background()
 	dataDirectory := filepath.Join("var", "go-workflow")
 
-	database, err := localdb.Open(filepath.Join(dataDirectory, "workflow.db"))
-	if err != nil {
-		return err
-	}
-	defer func() {
-		runErr = errors.Join(runErr, database.Close())
-	}()
-
-	credentials, err := credential.OpenFileStore(filepath.Join(dataDirectory, "credentials"))
-	if err != nil {
-		return err
-	}
-
-	workerService, err := worker.NewService(worker.Options{
-		Enabled:            true,
-		RegisterBuiltins:   true,
-		CredentialResolver: credentials,
-	})
-	if err != nil {
-		return err
-	}
-	if err := workerService.UnitRegistry().RegisterUnitFactory("GreetingUnit", func() workerunit.ExecutableUnit {
-		return &GreetingUnit{}
-	}); err != nil {
-		return err
-	}
-
-	workflowService, err := scheduler.NewService(scheduler.Options{
-		EnableEmbeddedWorker:   true,
-		EmbeddedWorker:         workerService,
-		Store:                  database.Runtime,
-		Definitions:            database.Definitions,
-		Workspace:              database.Workspace,
-		Automations:            database.Automations,
-		Credentials:            credentials,
-		DefaultCredentialScope: "demo",
+	application, err := openWorkflowApplication(ctx, dataDirectory, workflow.RuntimeOptions{
+		CredentialScope: "demo",
+		Builtins:        workflow.BuiltinStandard,
+		ConfigureWorker: func(workerService *worker.Service) error {
+			return workerService.UnitRegistry().RegisterUnitFactory("GreetingUnit", func() workerunit.ExecutableUnit {
+				return &GreetingUnit{}
+			})
+		},
 	})
 	if err != nil {
 		return err
 	}
 	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		runErr = errors.Join(runErr, workflowService.Shutdown(shutdownContext))
+		runErr = errors.Join(runErr, application.Close())
 	}()
+	workflowService := application.Scheduler
 
 	const workflowID = "embedded-greeting"
 	if err := workflowService.SaveWorkflow(ctx, &definition.Workflow{

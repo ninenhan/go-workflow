@@ -13,7 +13,7 @@
 
 - 嵌入式单进程运行
 - 独立 worker 注册/心跳/远程执行
-- `unit` / `local_go` / `http` / `queue` / `remote` / `container` executor
+- `unit` / `local_go` / `http` / `script` / `queue` / remote worker executor
 - workflow/version 管理 API
 - run 查询、事件、快照
 - publish route / HTTP trigger
@@ -51,6 +51,26 @@ flowchart LR
 ```bash
 go get github.com/ninenhan/go-workflow
 ```
+
+默认 ORM 使用单实例 SQLite，并自动装配定义、运行、工作区、自动化和加密凭据存储：
+
+```go
+app, err := workflow.OpenDefault(ctx)
+if err != nil {
+    return err
+}
+defer app.Close()
+```
+
+无数据库模式使用完整内存实现：
+
+```go
+app, err := workflow.OpenMemory(ctx)
+```
+
+MySQL、自定义 Store 和自定义 worker 使用严格入口 `workflow.New`；缺失任何 Store 都会
+直接报错，不会隐式退回内存。完整配置见
+[`docs/embedding-guide.md`](docs/embedding-guide.md)。
 
 ## V0 PC Web
 

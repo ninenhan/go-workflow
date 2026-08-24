@@ -15,9 +15,10 @@ The runtime store is the persistence boundary for workflow execution state.
      - run snapshots
      - run events
 
-`workflow-server` uses `persist/localdb` to place `GormStore` and the GORM
-definition repository in one SQLite database at
-`.go-workflow-data/workflow.db`. Set `WORKFLOW_DATA_DIR` to move the data root.
+`workflow.OpenDefault` uses `persist/defaultstore` and `persist/localdb` to place
+`GormStore` and the GORM definition repository in one SQLite database at
+`var/go-workflow/workflow.db`. Applications that need another location call
+`workflow.OpenDefaultWithOptions`.
 The database and directory use `0600` and `0700` permissions respectively.
 Startup enables WAL, full synchronization, foreign keys, a bounded busy
 timeout, and an integrity check. Invalid permissions, corruption, migration
@@ -30,15 +31,20 @@ terminal event.
 
 ## Usage
 
-Inject the store into `scheduler.Options`:
+Applications normally select a complete storage bundle through the facade:
 
 ```go
-db, _ := gorm.Open(sqlite.Open("workflow.db"), &gorm.Config{})
-store, _ := wfruntime.NewGormStore(db)
+app, err := workflow.OpenDefault(ctx)
+```
 
-svc, _ := scheduler.NewService(scheduler.Options{
-    Store: store,
+For a caller-owned Gorm connection, use the independent adapter:
+
+```go
+stores, err := gormstore.New(ctx, db, gormstore.Options{
+    Credentials: credentials,
+    Recovery:    gormstore.RecoveryDisabled,
 })
+app, err := workflow.New(ctx, workflow.Options{Stores: stores})
 ```
 
 ## Stored data model

@@ -27,6 +27,10 @@ type GormWorkspaceRepository struct {
 	db *gorm.DB
 }
 
+// NewGormWorkspaceRepository constructs the legacy standalone workspace adapter.
+//
+// Deprecated: new applications should compose the complete adapter through
+// persist/gormstore.New. This constructor remains available for compatibility.
 func NewGormWorkspaceRepository(db *gorm.DB) (*GormWorkspaceRepository, error) {
 	if db == nil {
 		return nil, errors.New("workspace database is required")

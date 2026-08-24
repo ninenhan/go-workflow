@@ -56,6 +56,10 @@ func NewMemoryStore() RuntimeStore {
 	return wfruntime.NewMemoryStore()
 }
 
+// NewGormStore is the legacy core facade for the standalone runtime adapter.
+//
+// Deprecated: new applications should compose the complete adapter through
+// persist/gormstore.New. This function remains available for compatibility.
 func NewGormStore(db *gorm.DB) (RuntimeStore, error) {
 	return wfruntime.NewGormStore(db)
 }

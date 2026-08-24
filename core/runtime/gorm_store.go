@@ -63,6 +63,10 @@ type runEventRecord struct {
 
 func (runEventRecord) TableName() string { return "workflow_run_events" }
 
+// NewGormStore constructs the legacy standalone runtime adapter.
+//
+// Deprecated: new applications should compose the complete adapter through
+// persist/gormstore.New. This constructor remains available for compatibility.
 func NewGormStore(db *gorm.DB) (*GormStore, error) {
 	if db == nil {
 		return nil, errors.New("gorm db is nil")

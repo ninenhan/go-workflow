@@ -14,6 +14,24 @@ that embed `go-workflow`.
   side effects.
 - `worker` composes executor backends and an application-owned unit registry.
 - `scheduler` composes planning, runtime state, dispatch, and an optional worker.
+- root package `workflow` provides `OpenDefault`, `OpenMemory`, and strict `New`
+  facade constructors.
+- `persist.Stores` is the complete persistence bundle. `persist/defaultstore`,
+  `persist/memory`, and `persist/gormstore` own concrete storage composition.
+
+`OpenDefault` is a versioned behavior contract: in the current major version it
+means single-process SQLite plus encrypted file credentials. Storage failures are
+returned to the caller and never trigger an implicit memory fallback.
+
+The historical Gorm constructors in `core/definition`, `core/runtime`, and
+`scheduler` remain available as source-compatible migration bridges. New
+integrations should depend on `persist/gormstore.New`, so a later internal move of
+the concrete records does not require another application-level API migration.
+
+Importing this module never executes packages under `examples`: Go runs an example
+`main` package only when it is explicitly built or invoked. Example-only imports
+may still participate in the module dependency graph, but have no initialization
+or runtime side effects in an embedding application.
 
 ## Registration ownership
 
