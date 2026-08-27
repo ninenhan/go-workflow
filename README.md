@@ -20,7 +20,7 @@
 - persistent time automations with structured schedules
 - strict OpenAPI-generated reusable service operations
 - pause / resume / cancel
-- 分支条件、节点级 loop、显式 back-edge
+- 分支条件、Parallel Gateway、节点级 loop、显式 back-edge
 - 内存 store 和 Gorm store
 
 作为 Go 核心库嵌入时的包边界、注册所有权和兼容策略见
@@ -519,6 +519,7 @@ curl -X POST http://127.0.0.1:8080/api/doc-demo \
 
 ## 文档
 
+- [Parallel Gateway](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/parallel-gateway.md)
 - [Quickstart](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/quickstart.md)
 - [Three Part Architecture](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/three-part-architecture.md)
 - [Control Plane API](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/control-plane-api.md)

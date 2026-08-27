@@ -34,16 +34,18 @@ const (
 
 // WorkflowDefinition only contains static and executable-agnostic fields.
 type WorkflowDefinition struct {
-	ID            string         `json:"id"`
-	Name          string         `json:"name"`
-	Description   string         `json:"description,omitempty"`
-	EntryNodes    []string       `json:"entry_nodes,omitempty"`
-	Nodes         []Node         `json:"nodes"`
-	Edges         []Edge         `json:"edges,omitempty"`
-	LoopGroups    []LoopGroup    `json:"loop_groups,omitempty"`
-	Triggers      []Trigger      `json:"triggers,omitempty"`
-	PublishConfig *PublishConfig `json:"publish_config,omitempty"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
+	ID             string         `json:"id"`
+	Name           string         `json:"name"`
+	Description    string         `json:"description,omitempty"`
+	MaxConcurrency int            `json:"max_concurrency,omitempty"`
+	FailFast       bool           `json:"fail_fast,omitempty"`
+	EntryNodes     []string       `json:"entry_nodes,omitempty"`
+	Nodes          []Node         `json:"nodes"`
+	Edges          []Edge         `json:"edges,omitempty"`
+	LoopGroups     []LoopGroup    `json:"loop_groups,omitempty"`
+	Triggers       []Trigger      `json:"triggers,omitempty"`
+	PublishConfig  *PublishConfig `json:"publish_config,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
 // LoopGroup repeats a structured single-entry, single-exit subgraph. The
@@ -63,7 +65,7 @@ type Node struct {
 	Name           string                   `json:"name"`
 	Description    string                   `json:"description,omitempty"`
 	Type           string                   `json:"type,omitempty"`
-	Executor       ExecutorSpec             `json:"executor"`
+	Executor       ExecutorSpec             `json:"executor,omitzero"`
 	Input          any                      `json:"input,omitempty"`
 	InputSpec      *InputSpec               `json:"input_spec,omitempty"`
 	Params         map[string]any           `json:"params,omitempty"`
@@ -76,6 +78,15 @@ type Node struct {
 	Branch         *BranchPolicy            `json:"branch,omitempty"`
 	Disabled       bool                     `json:"disabled,omitempty"`
 	UI             map[string]any           `json:"ui,omitempty"` // editor-only data, removed by compiler
+}
+
+const (
+	NodeTypeTask            = "task"
+	NodeTypeParallelGateway = "parallel_gateway"
+)
+
+func (n Node) IsParallelGateway() bool {
+	return n.Type == NodeTypeParallelGateway
 }
 
 type Edge struct {
@@ -127,6 +138,10 @@ type ExecutorSpec struct {
 	Ref     string         `json:"ref,omitempty"`
 	Version string         `json:"version,omitempty"`
 	Config  map[string]any `json:"config,omitempty"`
+}
+
+func (e ExecutorSpec) IsZero() bool {
+	return e.Type == "" && e.Ref == "" && e.Version == "" && len(e.Config) == 0
 }
 
 type InputSpec struct {

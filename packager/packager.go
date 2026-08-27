@@ -38,7 +38,7 @@ func ValidateStandalone(def *definition.WorkflowDefinition) error {
 	builtins := builtinUnits()
 	var issues []string
 	for _, node := range def.Nodes {
-		if node.Disabled {
+		if node.Disabled || node.IsParallelGateway() {
 			continue
 		}
 		execType := strings.TrimSpace(node.Executor.Type)

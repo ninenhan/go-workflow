@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,6 +35,155 @@ func TestRetryBackoff_UsesExponentialDelayRequestAndMaximum(t *testing.T) {
 		if got := retryBackoff(policy, test.attempt, test.requested); got != test.want {
 			t.Errorf("attempt %d requested %s: got %s want %s", test.attempt, test.requested, got, test.want)
 		}
+	}
+}
+
+func TestDefaultScheduler_BoundedParallelFiveJoinThree(t *testing.T) {
+	reg := executor.NewRegistry()
+	local := executor.NewLocalExecutor()
+	var active atomic.Int32
+	var maximum atomic.Int32
+	var firstPhaseDone atomic.Int32
+	var secondPhaseStartedEarly atomic.Bool
+	var calls sync.Map
+	local.Register("parallel", func(ctx context.Context, req executor.Request) (executor.Result, error) {
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			observed := maximum.Load()
+			if current <= observed || maximum.CompareAndSwap(observed, current) {
+				break
+			}
+		}
+		if strings.HasPrefix(req.NodeID, "b") && firstPhaseDone.Load() != 5 {
+			secondPhaseStartedEarly.Store(true)
+		}
+		countValue, _ := calls.LoadOrStore(req.NodeID, new(atomic.Int32))
+		count := countValue.(*atomic.Int32).Add(1)
+		select {
+		case <-ctx.Done():
+			return executor.Result{}, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+		if req.NodeID == "a3" && count == 1 {
+			return executor.Result{Status: executor.StatusRetryable, Error: "transient", RetryAfter: time.Nanosecond}, nil
+		}
+		if strings.HasPrefix(req.NodeID, "a") {
+			firstPhaseDone.Add(1)
+		}
+		return executor.Result{Output: req.NodeID}, nil
+	})
+	if err := reg.Register(local); err != nil {
+		t.Fatalf("register executor: %v", err)
+	}
+
+	plan := parallelFiveJoinThreePlan()
+	run, err := NewDefaultScheduler(reg, wfruntime.NewMemoryStore()).Run(context.Background(), plan, nil)
+	if err != nil {
+		t.Fatalf("run parallel plan: %v", err)
+	}
+	if run.Status != wfruntime.StatusSuccess || len(run.NodeRuns) != 8 {
+		t.Fatalf("unexpected run: status=%s node_runs=%d", run.Status, len(run.NodeRuns))
+	}
+	if maximum.Load() != 5 {
+		t.Fatalf("maximum concurrency = %d, want 5", maximum.Load())
+	}
+	if secondPhaseStartedEarly.Load() {
+		t.Fatal("second phase started before all five first-phase tasks completed")
+	}
+	if run.NodeRuns["a3"].Attempt != 2 {
+		t.Fatalf("a3 attempts = %d, want 2", run.NodeRuns["a3"].Attempt)
+	}
+}
+
+func TestDefaultScheduler_FailFastCancelsReadyAndDependentTasks(t *testing.T) {
+	reg := executor.NewRegistry()
+	local := executor.NewLocalExecutor()
+	local.Register("fail-fast", func(ctx context.Context, req executor.Request) (executor.Result, error) {
+		if req.NodeID == "a1" {
+			return executor.Result{Status: executor.StatusFailed, Error: "boom"}, nil
+		}
+		<-ctx.Done()
+		return executor.Result{}, ctx.Err()
+	})
+	if err := reg.Register(local); err != nil {
+		t.Fatalf("register executor: %v", err)
+	}
+	plan := parallelFiveJoinThreePlan()
+	plan.FailFast = true
+	run, err := NewDefaultScheduler(reg, wfruntime.NewMemoryStore()).Run(context.Background(), plan, nil)
+	if err != nil {
+		t.Fatalf("fail-fast run returned infrastructure error: %v", err)
+	}
+	if run.Status != wfruntime.StatusFailed || run.NodeRuns["a1"].Status != wfruntime.StatusFailed {
+		t.Fatalf("failure did not propagate: run=%s a1=%s", run.Status, run.NodeRuns["a1"].Status)
+	}
+	for _, id := range []string{"b1", "b2", "b3"} {
+		if run.NodeRuns[id].Status != wfruntime.StatusCancelled {
+			t.Fatalf("dependent %s status = %s", id, run.NodeRuns[id].Status)
+		}
+	}
+}
+
+func TestDefaultScheduler_RecoversInterruptedTaskAttempt(t *testing.T) {
+	reg := executor.NewRegistry()
+	local := executor.NewLocalExecutor()
+	local.Register("recover", func(context.Context, executor.Request) (executor.Result, error) {
+		return executor.Result{Output: "recovered"}, nil
+	})
+	if err := reg.Register(local); err != nil {
+		t.Fatalf("register executor: %v", err)
+	}
+	plan := singleRetryTestPlan("recover", 3)
+	run := PrepareRun(plan, nil)
+	run.StartedAt = time.Now().Add(-time.Minute)
+	run.Status = wfruntime.StatusRunning
+	run.CurrentNodes = []string{"action"}
+	run.NodeRuns["action"].Status = wfruntime.StatusRunning
+	run.NodeRuns["action"].Attempt = 1
+	store := wfruntime.NewMemoryStore()
+	result, err := NewDefaultScheduler(reg, store).Run(context.Background(), plan, run)
+	if err != nil {
+		t.Fatalf("recover run: %v", err)
+	}
+	if result.Status != wfruntime.StatusSuccess || result.NodeRuns["action"].Attempt != 2 {
+		t.Fatalf("unexpected recovered run: %+v", result.NodeRuns["action"])
+	}
+	events, err := store.Events(context.Background(), result.ID)
+	if err != nil {
+		t.Fatalf("load events: %v", err)
+	}
+	if len(events) == 0 || events[0].Type != wfruntime.EventRunResumed {
+		t.Fatalf("first recovery event = %#v", events)
+	}
+}
+
+func parallelFiveJoinThreePlan() *planning.ExecutionPlan {
+	nodes := make(map[string]planning.PlanNode, 8)
+	dependencies := make(map[string][]string, 8)
+	order := []string{"a1", "a2", "a3", "a4", "a5", "b1", "b2", "b3"}
+	for _, id := range order {
+		nodes[id] = planning.PlanNode{
+			ID:           id,
+			ExecutorType: string(executor.TypeLocalGo),
+			ExecutorRef:  "parallel",
+			Params:       map[string]any{"fn": "parallel"},
+			Retry:        planning.RetryPolicy{MaxAttempts: 2, Backoff: time.Nanosecond, MaxBackoff: time.Microsecond},
+		}
+		if strings.HasPrefix(id, "b") {
+			dependencies[id] = []string{"a1", "a2", "a3", "a4", "a5"}
+		} else {
+			dependencies[id] = []string{}
+		}
+	}
+	return &planning.ExecutionPlan{
+		PlanID:            "plan-five-join-three",
+		WorkflowID:        "wf-five-join-three",
+		WorkflowVersionID: "v1",
+		MaxConcurrency:    5,
+		TopologicalOrder:  order,
+		Dependencies:      dependencies,
+		Nodes:             nodes,
 	}
 }
 

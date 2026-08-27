@@ -317,6 +317,52 @@ func TestServicePauseAndResumeRun(t *testing.T) {
 	}
 }
 
+func TestServiceResumeInterruptedRun(t *testing.T) {
+	store := wfruntime.NewMemoryStore()
+	svc, err := NewService(Options{EnableEmbeddedWorker: true, Store: store})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	workflowID := "wf-interrupted-resume"
+	versionID := workflowID + ":v1"
+	if err := svc.SaveWorkflow(context.Background(), &definition.Workflow{ID: workflowID, Name: "resume interrupted"}); err != nil {
+		t.Fatalf("save workflow: %v", err)
+	}
+	if err := svc.SaveVersion(context.Background(), &definition.WorkflowVersion{
+		ID:         versionID,
+		WorkflowID: workflowID,
+		Version:    1,
+		Status:     definition.VersionPublished,
+		Definition: &definition.WorkflowDefinition{
+			ID: workflowID, Name: "resume interrupted", EntryNodes: []string{"text"},
+			Nodes: []definition.Node{{
+				ID: "text", Name: "text", Executor: definition.ExecutorSpec{Type: definition.ExecutorTypeUnit, Ref: "TextUnit"},
+				Params: map[string]any{"text": "recovered"}, Retry: &definition.RetryPolicy{MaxAttempts: 3},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("save version: %v", err)
+	}
+	run := wfruntime.NewWorkflowRun("run-interrupted-resume", workflowID, versionID, "persisted-plan")
+	run.Status = wfruntime.StatusRunning
+	run.StartedAt = time.Now().Add(-time.Minute)
+	run.CurrentNodes = []string{"text"}
+	run.NodeRuns["text"] = &wfruntime.NodeRun{
+		NodeID: "text", Status: wfruntime.StatusRunning, Attempt: 1, MaxAttempts: 3,
+	}
+	if err := store.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("save interrupted run: %v", err)
+	}
+
+	resumed, err := svc.ResumeRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("resume interrupted run: %v", err)
+	}
+	if resumed.Status != wfruntime.StatusSuccess || resumed.NodeRuns["text"].Attempt != 2 {
+		t.Fatalf("unexpected resumed run: status=%s node=%+v", resumed.Status, resumed.NodeRuns["text"])
+	}
+}
+
 func TestServicePublishVersionRejectsRouteConflict(t *testing.T) {
 	svc, err := NewService(Options{EnableEmbeddedWorker: true})
 	if err != nil {

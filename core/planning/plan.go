@@ -36,6 +36,8 @@ type ExecutionPlan struct {
 	PlanID            string                `json:"plan_id"`
 	WorkflowID        string                `json:"workflow_id"`
 	WorkflowVersionID string                `json:"workflow_version_id"`
+	MaxConcurrency    int                   `json:"max_concurrency"`
+	FailFast          bool                  `json:"fail_fast,omitempty"`
 	EntryNodes        []string              `json:"entry_nodes"`
 	ExitNodes         []string              `json:"exit_nodes"`
 	Adjacency         map[string][]string   `json:"adjacency"`

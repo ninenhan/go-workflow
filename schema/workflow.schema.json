@@ -14,6 +14,14 @@
     "description": {
       "type": "string"
     },
+    "max_concurrency": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1024
+    },
+    "fail_fast": {
+      "type": "boolean"
+    },
     "entry_nodes": {
       "type": "array",
       "items": {
@@ -205,7 +213,11 @@
           "type": "string"
         },
         "type": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "task",
+            "parallel_gateway"
+          ]
         },
         "executor": {
           "$ref": "#/$defs/executorSpec"
@@ -244,8 +256,42 @@
       },
       "required": [
         "id",
-        "name",
-        "executor"
+        "name"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "parallel_gateway"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["executor"] },
+                { "required": ["input"] },
+                { "required": ["input_spec"] },
+                { "required": ["params"] },
+                { "required": ["depends_on"] },
+                { "required": ["retry"] },
+                { "required": ["loop"] },
+                { "required": ["timeout"] },
+                { "required": ["branch"] },
+                { "required": ["disabled"] }
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "executor"
+            ]
+          }
+        }
       ]
     },
     "edge": {

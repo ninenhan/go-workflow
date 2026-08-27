@@ -131,3 +131,16 @@ func TestWorkspaceJSONOmitsAbsentNodeRetryPolicy(t *testing.T) {
 		t.Fatalf("absent retry policy must not cross the workspace contract: %s", raw)
 	}
 }
+
+func TestParallelGatewayJSONOmitsExecutor(t *testing.T) {
+	raw, err := json.Marshal(Node{
+		ID: "gateway", Name: "Parallel Gateway", Type: NodeTypeParallelGateway,
+		Executor: ExecutorSpec{Config: map[string]any{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"executor"`) {
+		t.Fatalf("gateway executor must be absent from JSON: %s", raw)
+	}
+}

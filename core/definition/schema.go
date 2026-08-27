@@ -110,7 +110,7 @@ func (b *workflowSchemaBuilder) structSchema(value reflect.Type) map[string]any 
 		}
 		optional := false
 		for _, option := range parts[1:] {
-			optional = optional || option == "omitempty"
+			optional = optional || option == "omitempty" || option == "omitzero"
 		}
 		properties[name] = b.schema(field.Type, true)
 		if !optional {

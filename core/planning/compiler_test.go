@@ -942,3 +942,83 @@ func TestCompilerCompile_PlanIdentityIncludesDefinitionContent(t *testing.T) {
 		t.Fatalf("different definitions produced the same plan id: %q", first.PlanID)
 	}
 }
+
+func TestCompilerCompile_ParallelGatewayFiveJoinThree(t *testing.T) {
+	task := func(id string) definition.Node {
+		return definition.Node{
+			ID:       id,
+			Type:     definition.NodeTypeTask,
+			Executor: definition.ExecutorSpec{Type: definition.ExecutorTypeUnit, Ref: "LogUnit"},
+		}
+	}
+	nodes := []definition.Node{
+		{ID: "fork", Type: definition.NodeTypeParallelGateway},
+		task("a1"), task("a2"), task("a3"), task("a4"), task("a5"),
+		{ID: "join-fork", Type: definition.NodeTypeParallelGateway},
+		task("b1"), task("b2"), task("b3"),
+	}
+	edges := make([]definition.Edge, 0, 13)
+	for _, id := range []string{"a1", "a2", "a3", "a4", "a5"} {
+		edges = append(edges, definition.Edge{From: "fork", To: id})
+		edges = append(edges, definition.Edge{From: id, To: "join-fork"})
+	}
+	for _, id := range []string{"b1", "b2", "b3"} {
+		edges = append(edges, definition.Edge{From: "join-fork", To: id})
+	}
+
+	plan, err := NewCompiler().Compile(&definition.WorkflowVersion{
+		ID:         "v-parallel",
+		WorkflowID: "wf-parallel",
+		Version:    1,
+		Definition: &definition.WorkflowDefinition{
+			ID:             "wf-parallel",
+			EntryNodes:     []string{"fork"},
+			MaxConcurrency: 5,
+			FailFast:       true,
+			Nodes:          nodes,
+			Edges:          edges,
+		},
+	})
+	if err != nil {
+		t.Fatalf("compile parallel gateways: %v", err)
+	}
+	if len(plan.Nodes) != 8 {
+		t.Fatalf("gateway leaked into executable nodes: %#v", plan.Nodes)
+	}
+	if _, ok := plan.Nodes["fork"]; ok {
+		t.Fatal("fork gateway generated a plan node")
+	}
+	if _, ok := plan.Nodes["join-fork"]; ok {
+		t.Fatal("join-fork gateway generated a plan node")
+	}
+	if got := strings.Join(plan.EntryNodes, ","); got != "a1,a2,a3,a4,a5" {
+		t.Fatalf("entry tasks = %s", got)
+	}
+	for _, id := range []string{"b1", "b2", "b3"} {
+		if got := strings.Join(plan.Dependencies[id], ","); got != "a1,a2,a3,a4,a5" {
+			t.Fatalf("dependencies[%s] = %s", id, got)
+		}
+	}
+	if plan.MaxConcurrency != 5 || !plan.FailFast {
+		t.Fatalf("execution policy not compiled: %+v", plan)
+	}
+}
+
+func TestCompilerCompile_ParallelGatewayRejectsExecutionFields(t *testing.T) {
+	_, err := NewCompiler().Compile(&definition.WorkflowVersion{
+		ID:         "v-invalid-gateway",
+		WorkflowID: "wf-invalid-gateway",
+		Version:    1,
+		Definition: &definition.WorkflowDefinition{
+			ID: "wf-invalid-gateway",
+			Nodes: []definition.Node{
+				{ID: "gateway", Type: definition.NodeTypeParallelGateway, Retry: &definition.RetryPolicy{MaxAttempts: 2}},
+				{ID: "task", Executor: definition.ExecutorSpec{Type: definition.ExecutorTypeUnit, Ref: "LogUnit"}},
+			},
+			Edges: []definition.Edge{{From: "gateway", To: "task"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only contain control-flow and UI fields") {
+		t.Fatalf("expected strict gateway validation, got %v", err)
+	}
+}

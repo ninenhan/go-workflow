@@ -19,6 +19,7 @@ const (
 	MaxNodeLoopIterations  = 1000
 	MaxNodeRetryAttempts   = 10
 	MaxNodeRetryBackoff    = 5 * time.Minute
+	MaxWorkflowConcurrency = 1024
 	shortcutAutoInputUIKey = "shortcut_auto_input"
 )
 
@@ -48,6 +49,10 @@ func (c *DefaultCompiler) Compile(version *definition.WorkflowVersion) (*Executi
 	if err != nil {
 		return nil, err
 	}
+	effectiveEdges, gatewayEntries, err := compileParallelGateways(def, effectiveEdges)
+	if err != nil {
+		return nil, err
+	}
 
 	nodes := make(map[string]PlanNode, len(def.Nodes))
 	adjacency := make(map[string][]string, len(def.Nodes))
@@ -58,7 +63,7 @@ func (c *DefaultCompiler) Compile(version *definition.WorkflowVersion) (*Executi
 	backEdges := make(map[string]BranchMeta)
 
 	for _, node := range def.Nodes {
-		if node.Disabled {
+		if node.Disabled || node.IsParallelGateway() {
 			continue
 		}
 		retry := RetryPolicy{}
@@ -132,7 +137,7 @@ func (c *DefaultCompiler) Compile(version *definition.WorkflowVersion) (*Executi
 	}
 
 	for _, node := range def.Nodes {
-		if node.Disabled {
+		if node.Disabled || node.IsParallelGateway() {
 			continue
 		}
 		for _, dep := range node.DependsOn {
@@ -148,7 +153,14 @@ func (c *DefaultCompiler) Compile(version *definition.WorkflowVersion) (*Executi
 		indegree[id] = len(deps)
 	}
 
-	entry, err := resolveEntryNodes(def.EntryNodes, nodes, disabledNodes, def.Edges)
+	entryNodes := def.EntryNodes
+	if len(entryNodes) > 0 {
+		entryNodes, err = resolveGatewayEntryNodes(entryNodes, gatewayEntries, nodes)
+		if err != nil {
+			return nil, err
+		}
+	}
+	entry, err := resolveEntryNodes(entryNodes, nodes, disabledNodes, def.Edges, gatewayEntries)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +213,8 @@ func (c *DefaultCompiler) Compile(version *definition.WorkflowVersion) (*Executi
 		PlanID:            planID,
 		WorkflowID:        version.WorkflowID,
 		WorkflowVersionID: version.ID,
+		MaxConcurrency:    def.MaxConcurrency,
+		FailFast:          def.FailFast,
 		EntryNodes:        append([]string{}, entry...),
 		ExitNodes:         exit,
 		Adjacency:         adjacency,
@@ -439,6 +453,196 @@ func (c *DefaultCompiler) now() time.Time {
 	return time.Now()
 }
 
+// compileParallelGateways removes control-only gateways from the executable
+// graph. Every task before a gateway chain is connected directly to every
+// first task after that chain, which gives joins normal DAG dependency
+// semantics without creating runtime records for gateways.
+func compileParallelGateways(
+	def *definition.WorkflowDefinition,
+	edges []definition.Edge,
+) ([]definition.Edge, map[string][]string, error) {
+	nodes := make(map[string]definition.Node, len(def.Nodes))
+	hasGateway := false
+	for _, node := range def.Nodes {
+		if node.Disabled {
+			continue
+		}
+		nodes[node.ID] = node
+		hasGateway = hasGateway || node.IsParallelGateway()
+	}
+	if !hasGateway {
+		return edges, nil, nil
+	}
+
+	outgoing := make(map[string][]definition.Edge, len(nodes))
+	incomingCount := make(map[string]int, len(nodes))
+	for _, edge := range edges {
+		from, fromOK := nodes[edge.From]
+		to, toOK := nodes[edge.To]
+		if !fromOK || !toOK {
+			return nil, nil, fmt.Errorf("edge %s -> %s references a missing or disabled node", edge.From, edge.To)
+		}
+		if from.IsParallelGateway() || to.IsParallelGateway() {
+			if edge.Kind == definition.EdgeKindBack {
+				return nil, nil, fmt.Errorf("parallel gateway edge %s -> %s cannot be a back edge", edge.From, edge.To)
+			}
+			if strings.TrimSpace(edge.Condition) != "" || edge.Priority != 0 {
+				return nil, nil, fmt.Errorf("parallel gateway edge %s -> %s must be unconditional", edge.From, edge.To)
+			}
+		}
+		if edge.Kind != definition.EdgeKindBack {
+			outgoing[edge.From] = append(outgoing[edge.From], edge)
+			incomingCount[edge.To]++
+		}
+	}
+	for _, node := range nodes {
+		if node.IsParallelGateway() && incomingCount[node.ID] == 0 && len(outgoing[node.ID]) == 0 {
+			return nil, nil, fmt.Errorf("parallel gateway %s is disconnected", node.ID)
+		}
+	}
+	if err := validateAcyclicDefinitionGraph(nodes, outgoing); err != nil {
+		return nil, nil, err
+	}
+
+	firstTasks := func(start string) ([]string, error) {
+		seen := make(map[string]bool)
+		result := make(map[string]struct{})
+		var walk func(string) error
+		walk = func(nodeID string) error {
+			if seen[nodeID] {
+				return fmt.Errorf("parallel gateway path contains cycle at %s", nodeID)
+			}
+			seen[nodeID] = true
+			node := nodes[nodeID]
+			if !node.IsParallelGateway() {
+				result[nodeID] = struct{}{}
+				seen[nodeID] = false
+				return nil
+			}
+			for _, edge := range outgoing[nodeID] {
+				if err := walk(edge.To); err != nil {
+					return err
+				}
+			}
+			seen[nodeID] = false
+			return nil
+		}
+		if err := walk(start); err != nil {
+			return nil, err
+		}
+		ids := make([]string, 0, len(result))
+		for id := range result {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		return ids, nil
+	}
+
+	compiled := make([]definition.Edge, 0, len(edges))
+	seenEdges := make(map[string]struct{}, len(edges))
+	appendEdge := func(edge definition.Edge) {
+		key := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%d", edge.From, edge.To, edge.Kind, edge.Condition, edge.Label, edge.Priority)
+		if _, exists := seenEdges[key]; exists {
+			return
+		}
+		seenEdges[key] = struct{}{}
+		compiled = append(compiled, edge)
+	}
+	for _, edge := range edges {
+		from := nodes[edge.From]
+		to := nodes[edge.To]
+		if edge.Kind == definition.EdgeKindBack {
+			appendEdge(edge)
+			continue
+		}
+		if from.IsParallelGateway() {
+			continue
+		}
+		if !to.IsParallelGateway() {
+			appendEdge(edge)
+			continue
+		}
+		targets, err := firstTasks(edge.To)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, target := range targets {
+			appendEdge(definition.Edge{From: edge.From, To: target})
+		}
+	}
+
+	gatewayEntries := make(map[string][]string)
+	for _, node := range nodes {
+		if !node.IsParallelGateway() {
+			continue
+		}
+		targets, err := firstTasks(node.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		gatewayEntries[node.ID] = targets
+	}
+	return compiled, gatewayEntries, nil
+}
+
+func validateAcyclicDefinitionGraph(nodes map[string]definition.Node, outgoing map[string][]definition.Edge) error {
+	state := make(map[string]uint8, len(nodes))
+	var visit func(string) error
+	visit = func(nodeID string) error {
+		switch state[nodeID] {
+		case 1:
+			return fmt.Errorf("workflow contains cycle at %s; compiler expects DAG plan", nodeID)
+		case 2:
+			return nil
+		}
+		state[nodeID] = 1
+		for _, edge := range outgoing[nodeID] {
+			if err := visit(edge.To); err != nil {
+				return err
+			}
+		}
+		state[nodeID] = 2
+		return nil
+	}
+	for nodeID := range nodes {
+		if err := visit(nodeID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func resolveGatewayEntryNodes(
+	configured []string,
+	gatewayEntries map[string][]string,
+	tasks map[string]PlanNode,
+) ([]string, error) {
+	resolved := make(map[string]struct{}, len(configured))
+	for _, nodeID := range configured {
+		if _, ok := tasks[nodeID]; ok {
+			resolved[nodeID] = struct{}{}
+			continue
+		}
+		targets, ok := gatewayEntries[nodeID]
+		if !ok {
+			resolved[nodeID] = struct{}{}
+			continue
+		}
+		if len(targets) == 0 {
+			return nil, fmt.Errorf("entry parallel gateway %s does not reach a task node", nodeID)
+		}
+		for _, target := range targets {
+			resolved[target] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(resolved))
+	for nodeID := range resolved {
+		result = append(result, nodeID)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
 func resolveDisabledNodes(def *definition.WorkflowDefinition) ([]definition.Edge, map[string]bool, map[string]string, error) {
 	disabled := make(map[string]bool, len(def.Nodes))
 	active := make(map[string]bool, len(def.Nodes))
@@ -606,6 +810,7 @@ func resolveEntryNodes(
 	activeNodes map[string]PlanNode,
 	disabled map[string]bool,
 	edges []definition.Edge,
+	controlEntries map[string][]string,
 ) ([]string, error) {
 	if len(configured) == 0 {
 		return nil, nil
@@ -619,6 +824,17 @@ func resolveEntryNodes(
 	walk = func(nodeID string, path map[string]bool) error {
 		if _, ok := activeNodes[nodeID]; ok {
 			resolved[nodeID] = struct{}{}
+			return nil
+		}
+		if targets, ok := controlEntries[nodeID]; ok {
+			if len(targets) == 0 {
+				return fmt.Errorf("entry control node %s does not reach an active task", nodeID)
+			}
+			for _, target := range targets {
+				if err := walk(target, path); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 		if !disabled[nodeID] {
@@ -656,12 +872,36 @@ func validateDefinition(def *definition.WorkflowDefinition) error {
 	if len(def.Nodes) == 0 {
 		return errors.New("workflow has no nodes")
 	}
+	if def.MaxConcurrency < 0 || def.MaxConcurrency > MaxWorkflowConcurrency {
+		return fmt.Errorf("max_concurrency must be between 0 and %d", MaxWorkflowConcurrency)
+	}
+	if def.MaxConcurrency > 1 {
+		if len(def.LoopGroups) > 0 {
+			return errors.New("max_concurrency greater than 1 cannot be combined with loop_groups")
+		}
+		for _, edge := range def.Edges {
+			if edge.Kind == definition.EdgeKindBack {
+				return errors.New("max_concurrency greater than 1 cannot be combined with back edges")
+			}
+		}
+	}
 	seen := make(map[string]struct{}, len(def.Nodes))
 	for _, node := range def.Nodes {
 		if strings.TrimSpace(node.ID) == "" {
 			return errors.New("node id is required")
 		}
-		if node.Executor.Type == "" {
+		if def.MaxConcurrency > 1 && node.Loop != nil {
+			return fmt.Errorf("max_concurrency greater than 1 cannot be combined with node loop %s", node.ID)
+		}
+		if node.IsParallelGateway() {
+			if node.Disabled || !node.Executor.IsZero() || node.Input != nil || node.InputSpec != nil ||
+				len(node.Params) > 0 || len(node.ParamBindings) > 0 || len(node.ParamTemplates) > 0 ||
+				len(node.DependsOn) > 0 || node.Retry != nil || node.Loop != nil || node.Timeout != 0 || node.Branch != nil {
+				return fmt.Errorf("parallel gateway %s can only contain control-flow and UI fields", node.ID)
+			}
+		} else if node.Type != "" && node.Type != definition.NodeTypeTask {
+			return fmt.Errorf("node %s has unsupported type %q", node.ID, node.Type)
+		} else if node.Executor.Type == "" {
 			return fmt.Errorf("node %s missing executor type", node.ID)
 		}
 		if node.Retry != nil {

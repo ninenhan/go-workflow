@@ -668,8 +668,11 @@ func (s *Service) ResumeRun(ctx context.Context, runID string) (*wfruntime.Workf
 	if err != nil {
 		return nil, err
 	}
-	if run.Status != wfruntime.StatusPaused {
-		return nil, errors.New("run is not paused")
+	if run.Status != wfruntime.StatusPaused && run.Status != wfruntime.StatusRunning {
+		return nil, errors.New("run is neither paused nor interrupted")
+	}
+	if _, active := s.activeRunCancels.Load(runID); active {
+		return nil, errors.New("run is already active")
 	}
 	if s.controller != nil {
 		s.controller.Clear(runID)
@@ -677,16 +680,6 @@ func (s *Service) ResumeRun(ctx context.Context, runID string) (*wfruntime.Workf
 	version, err := s.GetVersion(ctx, run.WorkflowVersionID)
 	if err != nil {
 		return nil, err
-	}
-	if s.store != nil {
-		_ = s.store.AppendEvent(ctx, wfruntime.RunEvent{
-			RunID:      run.ID,
-			WorkflowID: run.WorkflowID,
-			Type:       wfruntime.EventRunResumed,
-			Status:     wfruntime.StatusRunning,
-			Time:       time.Now(),
-			Message:    "run resumed",
-		})
 	}
 	return s.RunVersion(ctx, version, run)
 }

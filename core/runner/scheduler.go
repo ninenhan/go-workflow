@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/expr-lang/expr"
@@ -126,6 +127,8 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 	}
 
 	run = PrepareRun(plan, run)
+	resumed := !run.StartedAt.IsZero() && (run.Status == wfruntime.StatusPaused || run.Status == wfruntime.StatusRunning)
+	resumed = recoverInterruptedTasks(run) || resumed
 
 	now := time.Now()
 	run.Status = wfruntime.StatusRunning
@@ -134,7 +137,11 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 	}
 	run.UpdatedAt = now
 	s.saveRun(ctx, run)
-	s.emit(ctx, run, wfruntime.EventRunStarted, "", wfruntime.StatusRunning, "")
+	if resumed {
+		s.emit(ctx, run, wfruntime.EventRunResumed, "", wfruntime.StatusRunning, "interrupted task attempts reset to pending")
+	} else {
+		s.emit(ctx, run, wfruntime.EventRunStarted, "", wfruntime.StatusRunning, "")
+	}
 
 	for {
 		if stopped := s.applyRunCommand(ctx, run); stopped {
@@ -175,30 +182,118 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 			return run, err
 		}
 
-		for _, nodeID := range ready {
-			nodePlan := plan.Nodes[nodeID]
-			nodeRun := run.NodeRuns[nodeID]
-			nodeRun.Attempt++
-			nodeRun.StartedAt = time.Now()
-			nodeRun.Status = wfruntime.StatusRunning
-			run.CurrentNodes = []string{nodeID}
-			run.UpdatedAt = time.Now()
-			s.saveRun(ctx, run)
-			s.emit(ctx, run, wfruntime.EventNodeRunning, nodeID, nodeRun.Status, "")
+		if stopped, err := s.runReadyBatch(ctx, plan, run, ready); stopped {
+			return run, err
+		}
+	}
+}
 
-			task, emptyEach, err := buildExecuteTask(run, plan, nodePlan, nodeRun)
-			if err != nil {
-				s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
-				continue
+type nodeAttempt struct {
+	nodeID    string
+	nodePlan  planning.PlanNode
+	nodeRun   *wfruntime.NodeRun
+	task      executor.ExecuteTask
+	executor  executor.Executor
+	emptyEach bool
+	result    executor.ExecuteResult
+	reports   []executor.ExecuteResult
+	err       error
+}
+
+func (s *DefaultScheduler) runReadyBatch(
+	ctx context.Context,
+	plan *planning.ExecutionPlan,
+	run *wfruntime.WorkflowRun,
+	ready []string,
+) (bool, error) {
+	limit := plan.MaxConcurrency
+	if limit <= 0 {
+		limit = 1
+	}
+	if len(ready) > limit {
+		ready = ready[:limit]
+	}
+	attempts := make([]*nodeAttempt, 0, len(ready))
+	run.CurrentNodes = append([]string(nil), ready...)
+	for _, nodeID := range ready {
+		nodePlan := plan.Nodes[nodeID]
+		nodeRun := run.NodeRuns[nodeID]
+		nodeRun.Attempt++
+		nodeRun.StartedAt = time.Now()
+		nodeRun.FinishedAt = time.Time{}
+		nodeRun.Status = wfruntime.StatusRunning
+		nodeRun.Error = ""
+		attempt := &nodeAttempt{nodeID: nodeID, nodePlan: nodePlan, nodeRun: nodeRun}
+		attempt.task, attempt.emptyEach, attempt.err = buildExecuteTask(run, plan, nodePlan, nodeRun)
+		if attempt.err == nil && !attempt.emptyEach {
+			nodeRun.Input = attempt.task.Input
+			attempt.executor, attempt.err = s.ExecutorDispatcher.Dispatch(attempt.task)
+		}
+		attempts = append(attempts, attempt)
+		s.emit(ctx, run, wfruntime.EventNodeRunning, nodeID, nodeRun.Status, "")
+	}
+	run.UpdatedAt = time.Now()
+	s.saveRun(ctx, run)
+
+	batchCtx, cancelBatch := context.WithCancel(ctx)
+	defer cancelBatch()
+	var wg sync.WaitGroup
+	for _, attempt := range attempts {
+		if attempt.err != nil || attempt.emptyEach {
+			if plan.FailFast && attempt.err != nil && attempt.nodeRun.Attempt >= attempt.nodeRun.MaxAttempts {
+				cancelBatch()
 			}
-			if emptyEach {
-				if completed, completeErr := s.completeEmptyLoopGroup(ctx, plan, run, nodeID, task.Input); completeErr != nil {
-					s.handleNodeError(ctx, run, nodePlan, nodeRun, completeErr)
-					continue
-				} else if completed {
-					continue
+			continue
+		}
+		wg.Add(1)
+		go func(attempt *nodeAttempt) {
+			defer wg.Done()
+			execCtx := batchCtx
+			cancel := func() {}
+			if attempt.task.Timeout > 0 {
+				execCtx, cancel = context.WithTimeout(batchCtx, attempt.task.Timeout)
+			}
+			result, err := attempt.executor.Execute(execCtx, attempt.task)
+			attempt.result = result
+			attempt.err = err
+			if err == nil {
+				attempt.reports = append(attempt.reports, result)
+				status := result.NormalizedStatus()
+				if status == executor.StatusAccepted || status == executor.StatusRunning {
+					result, err = s.waitAsyncResult(execCtx, attempt.executor, attempt.task, result)
+					attempt.result = result
+					attempt.err = err
+					if err == nil {
+						attempt.reports = append(attempt.reports, result)
+					}
 				}
-				nodeRun.Input = task.Input
+			}
+			cancel()
+			if plan.FailFast && attemptIsTerminalFailure(attempt) {
+				cancelBatch()
+			}
+		}(attempt)
+	}
+	wg.Wait()
+
+	if err := ctx.Err(); err != nil {
+		s.cancelRun(context.WithoutCancel(ctx), run, err)
+		return true, err
+	}
+	failedFast := false
+	for _, attempt := range attempts {
+		nodeID := attempt.nodeID
+		nodePlan := attempt.nodePlan
+		nodeRun := attempt.nodeRun
+		removeCurrentNode(run, nodeID)
+		for _, report := range attempt.reports {
+			_ = s.ResultReporter.ReportResult(ctx, attempt.task, report)
+		}
+		if attempt.emptyEach {
+			if completed, completeErr := s.completeEmptyLoopGroup(ctx, plan, run, nodeID, attempt.task.Input); completeErr != nil {
+				s.handleNodeError(ctx, run, nodePlan, nodeRun, completeErr)
+			} else if !completed {
+				nodeRun.Input = attempt.task.Input
 				nodeRun.Status = wfruntime.StatusSuccess
 				nodeRun.Error = ""
 				nodeRun.Result = []any{}
@@ -211,143 +306,181 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 				run.UpdatedAt = nodeRun.FinishedAt
 				s.saveRun(ctx, run)
 				s.emit(ctx, run, wfruntime.EventNodeDone, nodeID, nodeRun.Status, "empty each-item input")
-				continue
 			}
-			// Persist the fully resolved task input before execution so the latest
-			// run payload can render per-node input/output in the editor.
-			nodeRun.Input = task.Input
-			execImpl, err := s.ExecutorDispatcher.Dispatch(task)
-			if err != nil {
-				s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
-				continue
-			}
-
-			execCtx := ctx
-			var cancel context.CancelFunc
-			if task.Timeout > 0 {
-				execCtx, cancel = context.WithTimeout(ctx, task.Timeout)
-			}
-			result, err := execImpl.Execute(execCtx, task)
-			if cancel != nil {
-				cancel()
-			}
-			if err != nil {
-				if contextErr := ctx.Err(); contextErr != nil {
-					s.cancelRun(context.WithoutCancel(ctx), run, contextErr)
-					return run, contextErr
-				}
-				s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
-				continue
-			}
-			_ = s.ResultReporter.ReportResult(ctx, task, result)
-
-			status := result.NormalizedStatus()
-			if status == executor.StatusAccepted || status == executor.StatusRunning {
-				asyncResult, asyncErr := s.waitAsyncResult(ctx, execImpl, task, result)
-				if asyncErr != nil {
-					if errors.Is(asyncErr, ErrRunPaused) || errors.Is(asyncErr, ErrRunCancelled) {
-						if stopped := s.applyRunCommand(ctx, run); stopped {
-							return run, nil
-						}
-					}
-					s.handleNodeError(ctx, run, nodePlan, nodeRun, asyncErr)
-					continue
-				}
-				result = asyncResult
-				status = result.NormalizedStatus()
-				_ = s.ResultReporter.ReportResult(ctx, task, result)
-			}
-
-			switch status {
-			case executor.StatusSucceeded:
-				eachOutputs, appendErr := appendEachLoopOutput(nodePlan, nodeRun, result.Output)
-				if appendErr != nil {
-					s.handleNodeError(ctx, run, nodePlan, nodeRun, appendErr)
-					continue
-				}
-				run.Context.NodeResults[nodeID] = result.Output
-				run.Context.Variables[nodeID] = result.Output
-				applyResultVariables(run, result)
-				if continued, iteration, err := shouldContinueLoop(nodePlan, nodeRun, run, result.Output); err != nil {
-					s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
-					continue
-				} else if continued {
-					nodeRun.Status = wfruntime.StatusPending
-					nodeRun.Error = ""
-					nodeRun.Result = result.Output
-					nodeRun.Metadata = mergeMap(nodeRun.Metadata, result.Metadata)
-					nodeRun.Metadata["loop_iteration"] = iteration
-					nodeRun.FinishedAt = time.Now()
-					run.UpdatedAt = nodeRun.FinishedAt
-					s.saveRun(ctx, run)
-					s.emit(ctx, run, wfruntime.EventNodeLoop, nodeID, nodeRun.Status, fmt.Sprintf("loop iteration %d", iteration))
-					continue
-				}
-				finalOutput := result.Output
-				groupOutput, groupContinued, grouped, groupIterations, groupErr := s.advanceLoopGroup(ctx, plan, run, nodeID, result.Output)
-				if groupErr != nil {
-					s.handleNodeError(ctx, run, nodePlan, nodeRun, groupErr)
-					continue
-				}
-				if groupContinued {
-					continue
-				}
-				if grouped {
-					finalOutput = groupOutput
-					run.Context.NodeResults[nodeID] = finalOutput
-					run.Context.Variables[nodeID] = finalOutput
-				}
-				if loopMode(nodePlan.Loop) == "each" {
-					finalOutput = append([]any(nil), eachOutputs...)
-					run.Context.NodeResults[nodeID] = finalOutput
-					run.Context.Variables[nodeID] = finalOutput
-				}
-				nodeRun.Status = wfruntime.StatusSuccess
-				nodeRun.Error = ""
-				nodeRun.Result = finalOutput
-				nodeRun.Metadata = mergeMap(nodeRun.Metadata, result.Metadata)
-				delete(nodeRun.Metadata, eachLoopItemCountMetadataKey)
-				delete(nodeRun.Metadata, eachLoopOutputsMetadataKey)
-				if grouped {
-					nodeRun.Metadata["loop_iteration"] = groupIterations
-				} else {
-					nodeRun.Metadata["loop_iteration"] = loopIteration(nodeRun) + 1
-				}
+			failedFast = failedFast || plan.FailFast && nodeRunTerminalFailure(nodeRun)
+			continue
+		}
+		if attempt.err != nil {
+			if errors.Is(attempt.err, context.Canceled) && plan.FailFast && ctx.Err() == nil {
+				nodeRun.Status = wfruntime.StatusCancelled
+				nodeRun.Error = "cancelled by fail-fast"
 				nodeRun.FinishedAt = time.Now()
 				run.UpdatedAt = nodeRun.FinishedAt
-				if looped, err := s.applyBackEdges(ctx, plan, run, nodeID); err != nil {
-					s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
-					continue
-				} else if looped {
-					continue
+				s.saveRun(ctx, run)
+				s.emit(ctx, run, wfruntime.EventNodeFailed, nodeID, nodeRun.Status, nodeRun.Error)
+			} else if errors.Is(attempt.err, ErrRunPaused) || errors.Is(attempt.err, ErrRunCancelled) {
+				if stopped := s.applyRunCommand(ctx, run); stopped {
+					return true, nil
 				}
+				s.handleNodeError(ctx, run, nodePlan, nodeRun, attempt.err)
+			} else {
+				s.handleNodeError(ctx, run, nodePlan, nodeRun, attempt.err)
+			}
+			failedFast = failedFast || plan.FailFast && nodeRunTerminalFailure(nodeRun)
+			continue
+		}
+
+		result := attempt.result
+		switch result.NormalizedStatus() {
+		case executor.StatusSucceeded:
+			eachOutputs, appendErr := appendEachLoopOutput(nodePlan, nodeRun, result.Output)
+			if appendErr != nil {
+				s.handleNodeError(ctx, run, nodePlan, nodeRun, appendErr)
+				break
+			}
+			run.Context.NodeResults[nodeID] = result.Output
+			run.Context.Variables[nodeID] = result.Output
+			applyResultVariables(run, result)
+			if continued, iteration, err := shouldContinueLoop(nodePlan, nodeRun, run, result.Output); err != nil {
+				s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
+				break
+			} else if continued {
+				nodeRun.Status = wfruntime.StatusPending
+				nodeRun.Error = ""
+				nodeRun.Result = result.Output
+				nodeRun.Metadata = mergeMap(nodeRun.Metadata, result.Metadata)
+				nodeRun.Metadata["loop_iteration"] = iteration
+				nodeRun.FinishedAt = time.Now()
+				run.UpdatedAt = nodeRun.FinishedAt
+				s.saveRun(ctx, run)
+				s.emit(ctx, run, wfruntime.EventNodeLoop, nodeID, nodeRun.Status, fmt.Sprintf("loop iteration %d", iteration))
+				break
+			}
+			finalOutput := result.Output
+			groupOutput, groupContinued, grouped, groupIterations, groupErr := s.advanceLoopGroup(ctx, plan, run, nodeID, result.Output)
+			if groupErr != nil {
+				s.handleNodeError(ctx, run, nodePlan, nodeRun, groupErr)
+				break
+			}
+			if groupContinued {
+				break
+			}
+			if grouped {
+				finalOutput = groupOutput
+				run.Context.NodeResults[nodeID] = finalOutput
+				run.Context.Variables[nodeID] = finalOutput
+			}
+			if loopMode(nodePlan.Loop) == "each" {
+				finalOutput = append([]any(nil), eachOutputs...)
+				run.Context.NodeResults[nodeID] = finalOutput
+				run.Context.Variables[nodeID] = finalOutput
+			}
+			nodeRun.Status = wfruntime.StatusSuccess
+			nodeRun.Error = ""
+			nodeRun.Result = finalOutput
+			nodeRun.Metadata = mergeMap(nodeRun.Metadata, result.Metadata)
+			delete(nodeRun.Metadata, eachLoopItemCountMetadataKey)
+			delete(nodeRun.Metadata, eachLoopOutputsMetadataKey)
+			if grouped {
+				nodeRun.Metadata["loop_iteration"] = groupIterations
+			} else {
+				nodeRun.Metadata["loop_iteration"] = loopIteration(nodeRun) + 1
+			}
+			nodeRun.FinishedAt = time.Now()
+			run.UpdatedAt = nodeRun.FinishedAt
+			if looped, err := s.applyBackEdges(ctx, plan, run, nodeID); err != nil {
+				s.handleNodeError(ctx, run, nodePlan, nodeRun, err)
+			} else if !looped {
 				s.saveRun(ctx, run)
 				s.emit(ctx, run, wfruntime.EventNodeDone, nodeID, nodeRun.Status, "")
-			case executor.StatusRetryable:
-				s.handleNodeFailure(
-					ctx,
-					run,
-					nodePlan,
-					nodeRun,
-					resultError(result, "executor requested retry"),
-					true,
-					result.RetryAfter,
-				)
-			case executor.StatusFailed:
-				s.handleNodeFailure(
-					ctx,
-					run,
-					nodePlan,
-					nodeRun,
-					resultError(result, "executor failed"),
-					false,
-					0,
-				)
-			default:
-				s.handleNodeError(ctx, run, nodePlan, nodeRun, fmt.Errorf("unsupported executor status: %s", status))
 			}
+		case executor.StatusRetryable:
+			s.handleNodeFailure(ctx, run, nodePlan, nodeRun, resultError(result, "executor requested retry"), true, result.RetryAfter)
+		case executor.StatusFailed:
+			s.handleNodeFailure(ctx, run, nodePlan, nodeRun, resultError(result, "executor failed"), false, 0)
+		default:
+			s.handleNodeError(ctx, run, nodePlan, nodeRun, fmt.Errorf("unsupported executor status: %s", result.NormalizedStatus()))
+		}
+		failedFast = failedFast || plan.FailFast && nodeRunTerminalFailure(nodeRun)
+	}
+	if failedFast {
+		s.failFastRun(ctx, run)
+		return true, nil
+	}
+	return false, nil
+}
+
+func recoverInterruptedTasks(run *wfruntime.WorkflowRun) bool {
+	if run == nil || run.StartedAt.IsZero() {
+		return false
+	}
+	recovered := false
+	for _, nodeRun := range run.NodeRuns {
+		if nodeRun == nil || nodeRun.Status != wfruntime.StatusRunning && nodeRun.Status != wfruntime.StatusRetry {
+			continue
+		}
+		nodeRun.Status = wfruntime.StatusPending
+		nodeRun.Error = ""
+		nodeRun.FinishedAt = time.Time{}
+		recovered = true
+	}
+	if recovered {
+		run.CurrentNodes = nil
+		run.FinishedAt = time.Time{}
+	}
+	return recovered
+}
+
+func attemptIsTerminalFailure(attempt *nodeAttempt) bool {
+	if attempt == nil || attempt.nodeRun == nil {
+		return false
+	}
+	if attempt.err != nil {
+		return attempt.nodeRun.Attempt >= attempt.nodeRun.MaxAttempts
+	}
+	switch attempt.result.NormalizedStatus() {
+	case executor.StatusSucceeded, executor.StatusAccepted, executor.StatusRunning:
+		return false
+	case executor.StatusRetryable:
+		return attempt.nodeRun.Attempt >= attempt.nodeRun.MaxAttempts
+	default:
+		return true
+	}
+}
+
+func nodeRunTerminalFailure(nodeRun *wfruntime.NodeRun) bool {
+	if nodeRun == nil {
+		return false
+	}
+	return nodeRun.Status == wfruntime.StatusFailed || nodeRun.Status == wfruntime.StatusTimeout
+}
+
+func removeCurrentNode(run *wfruntime.WorkflowRun, nodeID string) {
+	current := run.CurrentNodes[:0]
+	for _, id := range run.CurrentNodes {
+		if id != nodeID {
+			current = append(current, id)
 		}
 	}
+	run.CurrentNodes = current
+}
+
+func (s *DefaultScheduler) failFastRun(ctx context.Context, run *wfruntime.WorkflowRun) {
+	now := time.Now()
+	for _, nodeRun := range run.NodeRuns {
+		if nodeRun == nil || wfruntime.IsTerminal(nodeRun.Status) {
+			continue
+		}
+		nodeRun.Status = wfruntime.StatusCancelled
+		nodeRun.Error = "cancelled by fail-fast"
+		nodeRun.FinishedAt = now
+	}
+	run.Status = wfruntime.StatusFailed
+	run.CurrentNodes = nil
+	run.UpdatedAt = now
+	run.FinishedAt = now
+	s.saveRun(ctx, run)
+	s.emit(ctx, run, wfruntime.EventRunFinished, "", run.Status, "fail-fast")
 }
 
 func applyResultVariables(run *wfruntime.WorkflowRun, result executor.ExecuteResult) {
