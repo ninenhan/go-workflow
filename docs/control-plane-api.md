@@ -77,6 +77,15 @@ The scheduler now exposes a first-class HTTP control plane through `scheduler.Se
 22. `POST /v1/workers/heartbeat`
    - update worker heartbeat
 
+23. `POST /v1/workers/pull`
+   - lease the next command for an outbound-only worker
+
+24. `POST /v1/workers/complete`
+   - idempotently complete a leased worker command
+
+25. `GET /v1/workers/protocol`
+   - return the active protocol version, duration unit, timestamp format, transports, and operations
+
 ## Published invocation
 
 The published control-plane invocation supports two execution modes with the same input validation and active version:

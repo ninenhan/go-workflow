@@ -1,0 +1,36 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "go-workflow Worker Protocol",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/v1/workers/register": { "post": { "operationId": "registerWorker", "requestBody": { "$ref": "#/components/requestBodies/Register" }, "responses": { "200": { "$ref": "#/components/responses/Register" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/workers/heartbeat": { "post": { "operationId": "heartbeatWorker", "requestBody": { "$ref": "#/components/requestBodies/Heartbeat" }, "responses": { "200": { "description": "Heartbeat accepted" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/workers/pull": { "post": { "operationId": "pullWorkerCommand", "requestBody": { "$ref": "#/components/requestBodies/Pull" }, "responses": { "200": { "$ref": "#/components/responses/Pull" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/workers/complete": { "post": { "operationId": "completeWorkerCommand", "requestBody": { "$ref": "#/components/requestBodies/Complete" }, "responses": { "200": { "$ref": "#/components/responses/Complete" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/worker/execute": { "post": { "operationId": "executeWorkerTask", "requestBody": { "$ref": "#/components/requestBodies/Execute" }, "responses": { "200": { "$ref": "#/components/responses/Execute" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/worker/poll": { "post": { "operationId": "pollWorkerTask", "requestBody": { "$ref": "#/components/requestBodies/Poll" }, "responses": { "200": { "$ref": "#/components/responses/Poll" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/worker/cancel": { "post": { "operationId": "cancelWorkerTask", "requestBody": { "$ref": "#/components/requestBodies/Cancel" }, "responses": { "200": { "$ref": "#/components/responses/Cancel" }, "default": { "$ref": "#/components/responses/Error" } } } }
+  },
+  "components": {
+    "requestBodies": {
+      "Register": { "required": true, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/register_request" } } } },
+      "Heartbeat": { "required": true, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/heartbeat_request" } } } },
+      "Pull": { "required": true, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/pull_request" } } } },
+      "Complete": { "required": true, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/complete_request" } } } },
+      "Execute": { "required": true, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/execute_request" } } } },
+      "Poll": { "required": true, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/poll_request" } } } },
+      "Cancel": { "required": true, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/cancel_request" } } } }
+    },
+    "responses": {
+      "Register": { "description": "Worker registered", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/register_response" } } } },
+      "Pull": { "description": "Leased command or empty response", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/pull_response" } } } },
+      "Complete": { "description": "Completion accepted", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/complete_response" } } } },
+      "Execute": { "description": "Execution outcome", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/execute_response" } } } },
+      "Poll": { "description": "Poll outcome", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/poll_response" } } } },
+      "Cancel": { "description": "Cancellation outcome", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/cancel_response" } } } },
+      "Error": { "description": "Protocol or transport failure", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/error_response" } } } }
+    }
+  }
+}

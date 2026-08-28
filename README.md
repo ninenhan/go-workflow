@@ -525,6 +525,7 @@ curl -X POST http://127.0.0.1:8080/api/doc-demo \
 - [Three Part Architecture](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/three-part-architecture.md)
 - [Control Plane API](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/control-plane-api.md)
 - [Worker Runtime](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/worker-runtime.md)
+- [Worker Protocol v1](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/worker-protocol-v1.md)
 - [Runtime Control](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/runtime-control.md)
 - [Runtime Store](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/runtime-store.md)
 

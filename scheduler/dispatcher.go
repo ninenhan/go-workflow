@@ -20,6 +20,7 @@ type HybridDispatcher struct {
 	LocalRegistry *executor.Registry
 	Workers       WorkerRegistry
 	HTTPClient    *RemoteHTTPClient
+	PullBroker    *PullBroker
 	Mode          DispatchMode
 }
 
@@ -81,6 +82,7 @@ func (d *HybridDispatcher) remote(task executor.ExecuteTask) (executor.Executor,
 		return &RemoteBoundExecutor{
 			worker:  lease.Worker,
 			client:  d.HTTPClient,
+			pull:    d.PullBroker,
 			release: lease.Release,
 		}, nil
 	}
@@ -91,12 +93,14 @@ func (d *HybridDispatcher) remote(task executor.ExecuteTask) (executor.Executor,
 	return &RemoteBoundExecutor{
 		worker: worker,
 		client: d.HTTPClient,
+		pull:   d.PullBroker,
 	}, nil
 }
 
 type RemoteBoundExecutor struct {
 	worker   *workerproto.WorkerDescriptor
 	client   *RemoteHTTPClient
+	pull     *PullBroker
 	release  func()
 	released bool
 }
@@ -106,6 +110,31 @@ func (e *RemoteBoundExecutor) Type() executor.Type {
 }
 
 func (e *RemoteBoundExecutor) Execute(ctx context.Context, task executor.ExecuteTask) (executor.ExecuteResult, error) {
+	if e.worker.Transport == workerproto.TransportPull {
+		if e.pull == nil {
+			e.releaseOnce()
+			return executor.ExecuteResult{}, fmt.Errorf("pull broker is not configured")
+		}
+		response, err := e.pull.Dispatch(ctx, e.worker.ID, workerproto.OperationExecute, task, "")
+		if err != nil {
+			e.releaseOnce()
+			return executor.ExecuteResult{}, err
+		}
+		if response.Error != "" {
+			e.releaseOnce()
+			return executor.ExecuteResult{}, fmt.Errorf("pull worker execute: %s", response.Error)
+		}
+		if response.Result == nil {
+			e.releaseOnce()
+			return executor.ExecuteResult{}, fmt.Errorf("pull worker execute returned no result")
+		}
+		result := *response.Result
+		status := result.NormalizedStatus()
+		if status == executor.StatusSucceeded || status == executor.StatusFailed || status == executor.StatusRetryable {
+			e.releaseOnce()
+		}
+		return result, nil
+	}
 	result, err := e.client.Execute(ctx, *e.worker, task)
 	if err != nil {
 		e.releaseOnce()
@@ -119,6 +148,27 @@ func (e *RemoteBoundExecutor) Execute(ctx context.Context, task executor.Execute
 }
 
 func (e *RemoteBoundExecutor) Poll(ctx context.Context, task executor.ExecuteTask, externalTaskID string) (executor.ExecuteResult, error) {
+	if e.worker.Transport == workerproto.TransportPull {
+		if e.pull == nil {
+			e.releaseOnce()
+			return executor.ExecuteResult{}, fmt.Errorf("pull broker is not configured")
+		}
+		response, err := e.pull.Dispatch(ctx, e.worker.ID, workerproto.OperationPoll, task, externalTaskID)
+		if err != nil {
+			e.releaseOnce()
+			return executor.ExecuteResult{}, err
+		}
+		if response.Error != "" || response.Result == nil {
+			e.releaseOnce()
+			return executor.ExecuteResult{}, fmt.Errorf("pull worker poll: %s", response.Error)
+		}
+		result := *response.Result
+		status := result.NormalizedStatus()
+		if status == executor.StatusSucceeded || status == executor.StatusFailed || status == executor.StatusRetryable {
+			e.releaseOnce()
+		}
+		return result, nil
+	}
 	result, err := e.client.Poll(ctx, *e.worker, task, externalTaskID)
 	if err != nil {
 		e.releaseOnce()
@@ -132,6 +182,24 @@ func (e *RemoteBoundExecutor) Poll(ctx context.Context, task executor.ExecuteTas
 }
 
 func (e *RemoteBoundExecutor) Cancel(ctx context.Context, task executor.ExecuteTask, externalTaskID string) error {
+	if e.worker.Transport == workerproto.TransportPull {
+		if e.pull == nil {
+			e.releaseOnce()
+			return fmt.Errorf("pull broker is not configured")
+		}
+		response, err := e.pull.Dispatch(ctx, e.worker.ID, workerproto.OperationCancel, task, externalTaskID)
+		e.releaseOnce()
+		if err != nil {
+			return err
+		}
+		if response.Error != "" {
+			return fmt.Errorf("pull worker cancel: %s", response.Error)
+		}
+		if !response.Cancelled {
+			return fmt.Errorf("pull worker cancel rejected")
+		}
+		return nil
+	}
 	err := e.client.Cancel(ctx, *e.worker, task, externalTaskID)
 	e.releaseOnce()
 	return err

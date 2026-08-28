@@ -1,0 +1,19 @@
+{
+  "task": {
+    "dispatch_id": "dispatch-01",
+    "run_id": "run-01",
+    "node_id": "send_email",
+    "executor_type": "unit",
+    "executor_ref": "SendEmail",
+    "attempt": 1,
+    "max_attempts": 3,
+    "input": { "to": "hello@example.com" },
+    "params": { "subject": "hello" },
+    "context": { "tenant_id": "tenant-01" },
+    "timeout": 1500000000,
+    "deadline": "2026-08-28T12:34:56.123456789Z",
+    "async": true,
+    "poll_interval": 250000000,
+    "heartbeat_freq": 2000000000
+  }
+}

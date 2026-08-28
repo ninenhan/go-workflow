@@ -1,0 +1,10 @@
+{
+  "result": {
+    "status": "retryable",
+    "error": "provider unavailable",
+    "metadata": { "provider": "mail" },
+    "logs": ["attempt failed"],
+    "retry_after": 5000000000,
+    "finished_at": "2026-08-28T12:34:57.123456789Z"
+  }
+}

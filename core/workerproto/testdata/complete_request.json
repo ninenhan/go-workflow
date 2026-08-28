@@ -1,0 +1,8 @@
+{
+  "worker_id": "worker-01",
+  "command_id": "command-01",
+  "result": {
+    "status": "succeeded",
+    "output": { "message_id": "message-01" }
+  }
+}

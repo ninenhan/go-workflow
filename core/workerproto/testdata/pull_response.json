@@ -1,0 +1,14 @@
+{
+  "command": {
+    "command_id": "command-01",
+    "operation": "execute",
+    "task": {
+      "dispatch_id": "dispatch-01",
+      "run_id": "run-01",
+      "node_id": "send_email",
+      "executor_type": "unit",
+      "executor_ref": "SendEmail"
+    },
+    "delivery": 2
+  }
+}

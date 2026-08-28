@@ -34,6 +34,7 @@ const (
 )
 
 type ExecuteTask struct {
+	DispatchID      string         `json:"dispatch_id,omitempty"`
 	RunID           string         `json:"run_id"`
 	NodeID          string         `json:"node_id"`
 	ExecutorType    string         `json:"executor_type"`
@@ -45,7 +46,7 @@ type ExecuteTask struct {
 	Params          map[string]any `json:"params,omitempty"`
 	Context         map[string]any `json:"context,omitempty"`
 	Timeout         time.Duration  `json:"timeout,omitempty"`
-	Deadline        time.Time      `json:"deadline,omitempty"`
+	Deadline        time.Time      `json:"deadline,omitempty,omitzero"`
 	Async           bool           `json:"async,omitempty"`
 	PollInterval    time.Duration  `json:"poll_interval,omitempty"`
 	HeartbeatFreq   time.Duration  `json:"heartbeat_freq,omitempty"`
@@ -61,7 +62,7 @@ type ExecuteResult struct {
 	Logs            []string       `json:"logs,omitempty"`
 	ExternalTaskID  string         `json:"external_task_id,omitempty"`
 	RetryAfter      time.Duration  `json:"retry_after,omitempty"`
-	FinishedAt      time.Time      `json:"finished_at,omitempty"`
+	FinishedAt      time.Time      `json:"finished_at,omitempty,omitzero"`
 }
 
 // ExecutionFailure lets executors distinguish permanent failures from

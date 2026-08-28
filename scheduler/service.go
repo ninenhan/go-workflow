@@ -39,6 +39,7 @@ type Options struct {
 	Credentials            credential.Store
 	DefaultCredentialScope string
 	Automations            AutomationStore
+	PullBroker             *PullBroker
 }
 
 // Service is the orchestration entrypoint. It owns compilation, scheduling,
@@ -62,6 +63,7 @@ type Service struct {
 	automationWake   chan struct{}
 	automationDone   chan struct{}
 	automationError  string
+	pullBroker       *PullBroker
 }
 
 func NewService(opts Options) (*Service, error) {
@@ -80,6 +82,10 @@ func NewService(opts Options) (*Service, error) {
 	workers := opts.WorkerRegistry
 	if workers == nil {
 		workers = NewMemoryWorkerRegistry()
+	}
+	pullBroker := opts.PullBroker
+	if pullBroker == nil {
+		pullBroker = NewPullBroker()
 	}
 	defs := opts.Definitions
 	if defs == nil {
@@ -119,6 +125,7 @@ func NewService(opts Options) (*Service, error) {
 		scheduler.ResourcePools = opts.ResourcePools
 	}
 	dispatcher := NewHybridDispatcher(reg, workers, nil)
+	dispatcher.PullBroker = pullBroker
 	if opts.DispatchMode != "" {
 		dispatcher.Mode = opts.DispatchMode
 	} else if !opts.EnableEmbeddedWorker {
@@ -145,7 +152,15 @@ func NewService(opts Options) (*Service, error) {
 		credentialScope: credentialScope,
 		automations:     opts.Automations,
 		automationWake:  make(chan struct{}, 1),
+		pullBroker:      pullBroker,
 	}, nil
+}
+
+func (s *Service) PullBroker() *PullBroker {
+	if s == nil {
+		return nil
+	}
+	return s.pullBroker
 }
 
 func (s *Service) CredentialStore() credential.Store {

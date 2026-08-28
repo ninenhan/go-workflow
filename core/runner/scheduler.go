@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/expr-lang/expr"
+	"github.com/google/uuid"
 	"github.com/ninenhan/go-workflow/core/executor"
 	"github.com/ninenhan/go-workflow/core/planning"
 	wfruntime "github.com/ninenhan/go-workflow/core/runtime"
@@ -243,6 +244,7 @@ func (s *DefaultScheduler) runReadyBatch(
 		nodePlan := plan.Nodes[nodeID]
 		nodeRun := run.NodeRuns[nodeID]
 		nodeRun.Attempt++
+		nodeRun.DispatchID = uuid.NewString()
 		nodeRun.StartedAt = time.Now()
 		nodeRun.FinishedAt = time.Time{}
 		nodeRun.Status = wfruntime.StatusRunning
@@ -996,7 +998,12 @@ func buildExecuteTask(run *wfruntime.WorkflowRun, plan *planning.ExecutionPlan, 
 	pollInterval := durationFromMap(params, "poll_interval", time.Second)
 	hbFreq := durationFromMap(params, "heartbeat_interval", 2*time.Second)
 	async := boolFromMap(params, "async")
+	deadline := time.Time{}
+	if node.Timeout > 0 {
+		deadline = time.Now().UTC().Add(node.Timeout)
+	}
 	return executor.ExecuteTask{
+		DispatchID:      nodeRun.DispatchID,
 		RunID:           run.ID,
 		NodeID:          node.ID,
 		ExecutorType:    node.ExecutorType,
@@ -1008,7 +1015,7 @@ func buildExecuteTask(run *wfruntime.WorkflowRun, plan *planning.ExecutionPlan, 
 		Params:          params,
 		Context:         copyMap(run.Context.Variables),
 		Timeout:         node.Timeout,
-		Deadline:        time.Now().Add(node.Timeout),
+		Deadline:        deadline,
 		Async:           async,
 		PollInterval:    pollInterval,
 		HeartbeatFreq:   hbFreq,

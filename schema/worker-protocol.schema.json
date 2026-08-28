@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ninenhan.github.io/go-workflow/schema/worker-protocol.schema.json",
+  "title": "go-workflow Worker Protocol v1",
+  "oneOf": [
+    { "$ref": "#/$defs/register_request" },
+    { "$ref": "#/$defs/heartbeat_request" },
+    { "$ref": "#/$defs/execute_request" },
+    { "$ref": "#/$defs/execute_response" },
+    { "$ref": "#/$defs/poll_request" },
+    { "$ref": "#/$defs/poll_response" },
+    { "$ref": "#/$defs/cancel_request" },
+    { "$ref": "#/$defs/cancel_response" },
+    { "$ref": "#/$defs/pull_request" },
+    { "$ref": "#/$defs/pull_response" },
+    { "$ref": "#/$defs/complete_request" },
+    { "$ref": "#/$defs/complete_response" },
+    { "$ref": "#/$defs/error_response" }
+  ],
+  "$defs": {
+    "duration": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Nanoseconds",
+      "x-unit": "nanosecond"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339Nano timestamp"
+    },
+    "execute_task": {
+      "type": "object",
+      "required": ["run_id", "node_id", "executor_type"],
+      "properties": {
+        "dispatch_id": { "type": "string" },
+        "run_id": { "type": "string", "minLength": 1 },
+        "node_id": { "type": "string", "minLength": 1 },
+        "executor_type": { "type": "string", "minLength": 1 },
+        "executor_ref": { "type": "string" },
+        "credential_scope": { "type": "string" },
+        "attempt": { "type": "integer", "minimum": 0 },
+        "max_attempts": { "type": "integer", "minimum": 0 },
+        "input": true,
+        "params": { "type": "object" },
+        "context": { "type": "object" },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "deadline": { "$ref": "#/$defs/timestamp" },
+        "async": { "type": "boolean" },
+        "poll_interval": { "$ref": "#/$defs/duration" },
+        "heartbeat_freq": { "$ref": "#/$defs/duration" }
+      },
+      "additionalProperties": true
+    },
+    "execute_result": {
+      "type": "object",
+      "properties": {
+        "status": { "enum": ["succeeded", "failed", "retryable", "accepted", "running"] },
+        "output": true,
+        "variables": { "type": "object" },
+        "delete_variables": { "type": "array", "items": { "type": "string" } },
+        "error": { "type": "string" },
+        "metadata": { "type": "object" },
+        "logs": { "type": "array", "items": { "type": "string" } },
+        "external_task_id": { "type": "string" },
+        "retry_after": { "$ref": "#/$defs/duration" },
+        "finished_at": { "$ref": "#/$defs/timestamp" }
+      },
+      "additionalProperties": true
+    },
+    "worker_descriptor": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "tenant": { "type": "string" },
+        "endpoint": { "type": "string" },
+        "transport": { "enum": ["callback", "pull"] },
+        "protocol_version": { "const": "1" },
+        "status": { "enum": ["online", "offline", "busy"] },
+        "weight": { "type": "integer" },
+        "max_concurrent": { "type": "integer", "minimum": 0 },
+        "current_tasks": { "type": "integer", "minimum": 0 },
+        "supported_executor_types": { "type": "array", "items": { "type": "string" } },
+        "supported_executor_refs": { "type": "array", "items": { "type": "string" } },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "last_heartbeat_at": { "$ref": "#/$defs/timestamp" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["transport"], "properties": { "transport": { "const": "pull" } } },
+          "then": {},
+          "else": { "required": ["endpoint"], "properties": { "endpoint": { "type": "string", "minLength": 1 } } }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "register_request": {
+      "type": "object",
+      "required": ["worker"],
+      "properties": { "worker": { "$ref": "#/$defs/worker_descriptor" } },
+      "additionalProperties": true
+    },
+    "register_response": {
+      "type": "object",
+      "required": ["accepted"],
+      "properties": {
+        "accepted": { "type": "boolean" },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "heartbeat_request": {
+      "type": "object",
+      "required": ["worker_id"],
+      "properties": { "worker_id": { "type": "string", "minLength": 1 } },
+      "additionalProperties": true
+    },
+    "execute_request": {
+      "type": "object",
+      "required": ["task"],
+      "properties": { "task": { "$ref": "#/$defs/execute_task" } },
+      "additionalProperties": true
+    },
+    "execute_response": {
+      "type": "object",
+      "required": ["result"],
+      "properties": { "result": { "$ref": "#/$defs/execute_result" } },
+      "additionalProperties": true
+    },
+    "poll_request": {
+      "type": "object",
+      "required": ["task", "external_task_id"],
+      "properties": {
+        "task": { "$ref": "#/$defs/execute_task" },
+        "external_task_id": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "poll_response": {
+      "type": "object",
+      "required": ["result"],
+      "properties": { "result": { "$ref": "#/$defs/execute_result" } },
+      "additionalProperties": true
+    },
+    "cancel_request": {
+      "type": "object",
+      "required": ["task", "external_task_id"],
+      "properties": {
+        "task": { "$ref": "#/$defs/execute_task" },
+        "external_task_id": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "cancel_response": {
+      "type": "object",
+      "required": ["cancelled"],
+      "properties": {
+        "cancelled": { "type": "boolean" },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "command": {
+      "type": "object",
+      "required": ["command_id", "operation", "task", "delivery"],
+      "properties": {
+        "command_id": { "type": "string", "minLength": 1 },
+        "operation": { "enum": ["execute", "poll", "cancel"] },
+        "task": { "$ref": "#/$defs/execute_task" },
+        "external_task_id": { "type": "string" },
+        "delivery": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": true
+    },
+    "pull_request": {
+      "type": "object",
+      "required": ["worker_id"],
+      "properties": { "worker_id": { "type": "string", "minLength": 1 } },
+      "additionalProperties": true
+    },
+    "pull_response": {
+      "type": "object",
+      "properties": { "command": { "$ref": "#/$defs/command" } },
+      "additionalProperties": true
+    },
+    "complete_request": {
+      "type": "object",
+      "required": ["worker_id", "command_id"],
+      "properties": {
+        "worker_id": { "type": "string", "minLength": 1 },
+        "command_id": { "type": "string", "minLength": 1 },
+        "result": { "$ref": "#/$defs/execute_result" },
+        "cancelled": { "type": "boolean" },
+        "error": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "complete_response": {
+      "type": "object",
+      "required": ["accepted"],
+      "properties": { "accepted": { "type": "boolean" } },
+      "additionalProperties": true
+    },
+    "error_response": {
+      "type": "object",
+      "required": ["error", "code"],
+      "properties": {
+        "error": { "type": "string" },
+        "code": { "type": "string" },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

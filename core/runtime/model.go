@@ -42,6 +42,7 @@ type WorkflowRun struct {
 
 type NodeRun struct {
 	NodeID      string    `json:"node_id"`
+	DispatchID  string    `json:"dispatch_id,omitempty"`
 	Status      Status    `json:"status"`
 	Attempt     int       `json:"attempt"`
 	MaxAttempts int       `json:"max_attempts,omitempty"`

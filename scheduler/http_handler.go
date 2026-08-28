@@ -60,6 +60,9 @@ func (h *HTTPHandler) Handler() http.Handler {
 	mux.HandleFunc("/v1/workers", h.handleWorkers)
 	mux.HandleFunc(workerproto.DefaultRegisterPath, h.handleRegister)
 	mux.HandleFunc(workerproto.DefaultHeartbeatPath, h.handleHeartbeat)
+	mux.HandleFunc(workerproto.DefaultPullPath, h.handlePull)
+	mux.HandleFunc(workerproto.DefaultCompletePath, h.handleComplete)
+	mux.HandleFunc("/v1/workers/protocol", h.handleWorkerProtocol)
 	mux.HandleFunc("/", h.handlePublishedOrTrigger)
 	return mux
 }
@@ -1004,45 +1007,135 @@ func (h *HTTPHandler) handlePublishedOrTrigger(w http.ResponseWriter, r *http.Re
 }
 
 func (h *HTTPHandler) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if !acceptWorkerProtocolVersion(w, r) {
+		return
+	}
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		writeWorkerProtocolError(w, http.StatusMethodNotAllowed, workerproto.ErrorInvalidRequest, "method not allowed", false)
 		return
 	}
 	var req workerproto.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+		writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidJSON, "invalid json", false)
+		return
+	}
+	if req.Worker.ProtocolVersion != "" && req.Worker.ProtocolVersion != workerproto.ProtocolVersion {
+		writeWorkerProtocolError(w, http.StatusUpgradeRequired, workerproto.ErrorProtocolVersion, "unsupported worker protocol version: "+req.Worker.ProtocolVersion, false)
 		return
 	}
 	if h == nil || h.Service == nil || h.Service.WorkerRegistry() == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "worker registry not configured"})
+		writeWorkerProtocolError(w, http.StatusNotImplemented, workerproto.ErrorWorkerUnavailable, "worker registry not configured", true)
 		return
 	}
 	if err := h.Service.WorkerRegistry().Register(r.Context(), req.Worker); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidRequest, err.Error(), false)
 		return
 	}
-	writeJSON(w, http.StatusOK, workerproto.RegisterResponse{Accepted: true})
+	writeWorkerJSON(w, http.StatusOK, workerproto.RegisterResponse{Accepted: true})
 }
 
 func (h *HTTPHandler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if !acceptWorkerProtocolVersion(w, r) {
+		return
+	}
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		writeWorkerProtocolError(w, http.StatusMethodNotAllowed, workerproto.ErrorInvalidRequest, "method not allowed", false)
 		return
 	}
 	var req workerproto.HeartbeatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+		writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidJSON, "invalid json", false)
 		return
 	}
 	if h == nil || h.Service == nil || h.Service.WorkerRegistry() == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "worker registry not configured"})
+		writeWorkerProtocolError(w, http.StatusNotImplemented, workerproto.ErrorWorkerUnavailable, "worker registry not configured", true)
 		return
 	}
 	if err := h.Service.WorkerRegistry().Heartbeat(r.Context(), req.WorkerID); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeWorkerProtocolError(w, http.StatusNotFound, workerproto.ErrorWorkerUnavailable, err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeWorkerJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (h *HTTPHandler) handleWorkerProtocol(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeWorkerProtocolError(w, http.StatusMethodNotAllowed, workerproto.ErrorInvalidRequest, "method not allowed", false)
+		return
+	}
+	writeWorkerJSON(w, http.StatusOK, workerproto.CurrentProtocolInfo())
+}
+
+func (h *HTTPHandler) handlePull(w http.ResponseWriter, r *http.Request) {
+	if !acceptWorkerProtocolVersion(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeWorkerProtocolError(w, http.StatusMethodNotAllowed, workerproto.ErrorInvalidRequest, "method not allowed", false)
+		return
+	}
+	var req workerproto.PullRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidJSON, "invalid json", false)
+		return
+	}
+	if h == nil || h.Service == nil || h.Service.PullBroker() == nil {
+		writeWorkerProtocolError(w, http.StatusNotImplemented, workerproto.ErrorWorkerUnavailable, "pull transport not configured", true)
+		return
+	}
+	if err := h.requirePullWorker(r, req.WorkerID); err != nil {
+		writeWorkerProtocolError(w, http.StatusNotFound, workerproto.ErrorWorkerUnavailable, err.Error(), true)
+		return
+	}
+	command, err := h.Service.PullBroker().Pull(r.Context(), req.WorkerID)
+	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		writeWorkerProtocolError(w, http.StatusServiceUnavailable, workerproto.ErrorWorkerUnavailable, err.Error(), true)
+		return
+	}
+	writeWorkerJSON(w, http.StatusOK, workerproto.PullResponse{Command: command})
+}
+
+func (h *HTTPHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
+	if !acceptWorkerProtocolVersion(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeWorkerProtocolError(w, http.StatusMethodNotAllowed, workerproto.ErrorInvalidRequest, "method not allowed", false)
+		return
+	}
+	var req workerproto.CompleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidJSON, "invalid json", false)
+		return
+	}
+	if h == nil || h.Service == nil || h.Service.PullBroker() == nil {
+		writeWorkerProtocolError(w, http.StatusNotImplemented, workerproto.ErrorWorkerUnavailable, "pull transport not configured", true)
+		return
+	}
+	if err := h.Service.PullBroker().Complete(req); err != nil {
+		writeWorkerProtocolError(w, http.StatusNotFound, workerproto.ErrorInvalidRequest, err.Error(), false)
+		return
+	}
+	writeWorkerJSON(w, http.StatusOK, workerproto.CompleteResponse{Accepted: true})
+}
+
+func (h *HTTPHandler) requirePullWorker(r *http.Request, workerID string) error {
+	if workerID == "" || h.Service.WorkerRegistry() == nil {
+		return fmt.Errorf("pull worker is not registered: %s", workerID)
+	}
+	workers, err := h.Service.WorkerRegistry().List(r.Context())
+	if err != nil {
+		return err
+	}
+	for _, descriptor := range workers {
+		if descriptor.ID == workerID && descriptor.Transport == workerproto.TransportPull && descriptor.Status != workerproto.StatusOffline {
+			return nil
+		}
+	}
+	return fmt.Errorf("pull worker is not registered: %s", workerID)
 }
 
 type RegistryHTTPHandler struct {
@@ -1057,55 +1150,92 @@ func (h *RegistryHTTPHandler) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc(workerproto.DefaultRegisterPath, h.handleRegister)
 	mux.HandleFunc(workerproto.DefaultHeartbeatPath, h.handleHeartbeat)
+	mux.HandleFunc("/v1/workers/protocol", h.handleProtocol)
 	return mux
 }
 
 func (h *RegistryHTTPHandler) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if !acceptWorkerProtocolVersion(w, r) {
+		return
+	}
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		writeWorkerProtocolError(w, http.StatusMethodNotAllowed, workerproto.ErrorInvalidRequest, "method not allowed", false)
 		return
 	}
 	var req workerproto.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+		writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidJSON, "invalid json", false)
+		return
+	}
+	if req.Worker.ProtocolVersion != "" && req.Worker.ProtocolVersion != workerproto.ProtocolVersion {
+		writeWorkerProtocolError(w, http.StatusUpgradeRequired, workerproto.ErrorProtocolVersion, "unsupported worker protocol version: "+req.Worker.ProtocolVersion, false)
 		return
 	}
 	if h == nil || h.Workers == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "worker registry not configured"})
+		writeWorkerProtocolError(w, http.StatusNotImplemented, workerproto.ErrorWorkerUnavailable, "worker registry not configured", true)
 		return
 	}
 	if err := h.Workers.Register(r.Context(), req.Worker); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidRequest, err.Error(), false)
 		return
 	}
-	writeJSON(w, http.StatusOK, workerproto.RegisterResponse{Accepted: true})
+	writeWorkerJSON(w, http.StatusOK, workerproto.RegisterResponse{Accepted: true})
 }
 
 func (h *RegistryHTTPHandler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if !acceptWorkerProtocolVersion(w, r) {
+		return
+	}
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		writeWorkerProtocolError(w, http.StatusMethodNotAllowed, workerproto.ErrorInvalidRequest, "method not allowed", false)
 		return
 	}
 	var req workerproto.HeartbeatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+		writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidJSON, "invalid json", false)
 		return
 	}
 	if h == nil || h.Workers == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "worker registry not configured"})
+		writeWorkerProtocolError(w, http.StatusNotImplemented, workerproto.ErrorWorkerUnavailable, "worker registry not configured", true)
 		return
 	}
 	if err := h.Workers.Heartbeat(r.Context(), req.WorkerID); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeWorkerProtocolError(w, http.StatusNotFound, workerproto.ErrorWorkerUnavailable, err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeWorkerJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (h *RegistryHTTPHandler) handleProtocol(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeWorkerProtocolError(w, http.StatusMethodNotAllowed, workerproto.ErrorInvalidRequest, "method not allowed", false)
+		return
+	}
+	writeWorkerJSON(w, http.StatusOK, workerproto.CurrentProtocolInfo())
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func acceptWorkerProtocolVersion(w http.ResponseWriter, r *http.Request) bool {
+	version := r.Header.Get(workerproto.ProtocolHeader)
+	if version == "" || version == workerproto.ProtocolVersion {
+		return true
+	}
+	writeWorkerProtocolError(w, http.StatusUpgradeRequired, workerproto.ErrorProtocolVersion, "unsupported worker protocol version: "+version, false)
+	return false
+}
+
+func writeWorkerProtocolError(w http.ResponseWriter, status int, code workerproto.ErrorCode, message string, retryable bool) {
+	writeWorkerJSON(w, status, workerproto.ErrorResponse{Error: message, Code: code, Retryable: retryable})
+}
+
+func writeWorkerJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set(workerproto.ProtocolHeader, workerproto.ProtocolVersion)
+	writeJSON(w, status, payload)
 }
 
 func parseLabelQuery(raw string) map[string]string {
