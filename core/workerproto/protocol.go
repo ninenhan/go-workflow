@@ -20,6 +20,25 @@ const (
 	TimestampFormat      = "RFC3339Nano"
 )
 
+// AcceptsProtocolVersion reports whether the current runtime can decode a
+// protocol version. Empty identifies the versionless callback compatibility
+// bridge; it must not be interpreted as support for v1 behavior.
+func AcceptsProtocolVersion(version string) bool {
+	return version == "" || version == ProtocolVersion
+}
+
+// SupportsExecuteReplay reports whether the protocol guarantees that replaying
+// Execute with the same dispatch_id does not invoke user code twice.
+func SupportsExecuteReplay(version string) bool {
+	return version == ProtocolVersion
+}
+
+// SupportsPullTransport reports whether the protocol implements leased command
+// delivery and idempotent completion.
+func SupportsPullTransport(version string) bool {
+	return version == ProtocolVersion
+}
+
 type Transport string
 
 const (

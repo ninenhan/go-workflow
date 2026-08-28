@@ -1019,7 +1019,7 @@ func (h *HTTPHandler) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidJSON, "invalid json", false)
 		return
 	}
-	if req.Worker.ProtocolVersion != "" && req.Worker.ProtocolVersion != workerproto.ProtocolVersion {
+	if !workerproto.AcceptsProtocolVersion(req.Worker.ProtocolVersion) {
 		writeWorkerProtocolError(w, http.StatusUpgradeRequired, workerproto.ErrorProtocolVersion, "unsupported worker protocol version: "+req.Worker.ProtocolVersion, false)
 		return
 	}
@@ -1167,7 +1167,7 @@ func (h *RegistryHTTPHandler) handleRegister(w http.ResponseWriter, r *http.Requ
 		writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidJSON, "invalid json", false)
 		return
 	}
-	if req.Worker.ProtocolVersion != "" && req.Worker.ProtocolVersion != workerproto.ProtocolVersion {
+	if !workerproto.AcceptsProtocolVersion(req.Worker.ProtocolVersion) {
 		writeWorkerProtocolError(w, http.StatusUpgradeRequired, workerproto.ErrorProtocolVersion, "unsupported worker protocol version: "+req.Worker.ProtocolVersion, false)
 		return
 	}
@@ -1222,7 +1222,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func acceptWorkerProtocolVersion(w http.ResponseWriter, r *http.Request) bool {
 	version := r.Header.Get(workerproto.ProtocolHeader)
-	if version == "" || version == workerproto.ProtocolVersion {
+	if workerproto.AcceptsProtocolVersion(version) {
 		return true
 	}
 	writeWorkerProtocolError(w, http.StatusUpgradeRequired, workerproto.ErrorProtocolVersion, "unsupported worker protocol version: "+version, false)

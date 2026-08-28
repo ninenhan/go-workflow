@@ -25,7 +25,8 @@ func (s *Service) MaintainRegistration(ctx context.Context, opts RegistrationOpt
 	if opts.Interval <= 0 {
 		opts.Interval = 10 * time.Second
 	}
-	if err := client.Register(ctx, opts.SchedulerEndpoint, opts.Descriptor); err != nil {
+	descriptor := s.Descriptor(opts.Descriptor)
+	if err := client.Register(ctx, opts.SchedulerEndpoint, descriptor); err != nil {
 		return err
 	}
 
@@ -37,7 +38,7 @@ func (s *Service) MaintainRegistration(ctx context.Context, opts RegistrationOpt
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if err := client.Heartbeat(ctx, opts.SchedulerEndpoint, opts.Descriptor.ID); err != nil {
+			if err := client.Heartbeat(ctx, opts.SchedulerEndpoint, descriptor.ID); err != nil {
 				return err
 			}
 		}

@@ -171,6 +171,7 @@ func (b *PullBroker) Complete(req workerproto.CompleteRequest) error {
 	b.completedOrder = append(b.completedOrder, req.CommandID)
 	for len(b.completedOrder) > completedCommandCacheLimit {
 		oldest := b.completedOrder[0]
+		b.completedOrder[0] = ""
 		b.completedOrder = b.completedOrder[1:]
 		delete(b.completed, oldest)
 	}

@@ -152,7 +152,7 @@ func (s *Service) handleProtocol(w http.ResponseWriter, r *http.Request) {
 
 func acceptProtocolVersion(w http.ResponseWriter, r *http.Request) bool {
 	version := r.Header.Get(workerproto.ProtocolHeader)
-	if version == "" || version == workerproto.ProtocolVersion {
+	if workerproto.AcceptsProtocolVersion(version) {
 		return true
 	}
 	writeProtocolError(w, http.StatusUpgradeRequired, workerproto.ErrorProtocolVersion, "unsupported worker protocol version: "+version, false)

@@ -5,15 +5,23 @@
     "version": "1.0.0"
   },
   "paths": {
-    "/v1/workers/register": { "post": { "operationId": "registerWorker", "requestBody": { "$ref": "#/components/requestBodies/Register" }, "responses": { "200": { "$ref": "#/components/responses/Register" }, "default": { "$ref": "#/components/responses/Error" } } } },
-    "/v1/workers/heartbeat": { "post": { "operationId": "heartbeatWorker", "requestBody": { "$ref": "#/components/requestBodies/Heartbeat" }, "responses": { "200": { "description": "Heartbeat accepted" }, "default": { "$ref": "#/components/responses/Error" } } } },
-    "/v1/workers/pull": { "post": { "operationId": "pullWorkerCommand", "requestBody": { "$ref": "#/components/requestBodies/Pull" }, "responses": { "200": { "$ref": "#/components/responses/Pull" }, "default": { "$ref": "#/components/responses/Error" } } } },
-    "/v1/workers/complete": { "post": { "operationId": "completeWorkerCommand", "requestBody": { "$ref": "#/components/requestBodies/Complete" }, "responses": { "200": { "$ref": "#/components/responses/Complete" }, "default": { "$ref": "#/components/responses/Error" } } } },
-    "/v1/worker/execute": { "post": { "operationId": "executeWorkerTask", "requestBody": { "$ref": "#/components/requestBodies/Execute" }, "responses": { "200": { "$ref": "#/components/responses/Execute" }, "default": { "$ref": "#/components/responses/Error" } } } },
-    "/v1/worker/poll": { "post": { "operationId": "pollWorkerTask", "requestBody": { "$ref": "#/components/requestBodies/Poll" }, "responses": { "200": { "$ref": "#/components/responses/Poll" }, "default": { "$ref": "#/components/responses/Error" } } } },
-    "/v1/worker/cancel": { "post": { "operationId": "cancelWorkerTask", "requestBody": { "$ref": "#/components/requestBodies/Cancel" }, "responses": { "200": { "$ref": "#/components/responses/Cancel" }, "default": { "$ref": "#/components/responses/Error" } } } }
+    "/v1/workers/protocol": { "get": { "operationId": "getSchedulerWorkerProtocol", "responses": { "200": { "$ref": "#/components/responses/ProtocolInfo" } } } },
+    "/v1/worker/protocol": { "get": { "operationId": "getWorkerProtocol", "responses": { "200": { "$ref": "#/components/responses/ProtocolInfo" } } } },
+    "/v1/workers/register": { "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }], "post": { "operationId": "registerWorker", "requestBody": { "$ref": "#/components/requestBodies/Register" }, "responses": { "200": { "$ref": "#/components/responses/Register" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/workers/heartbeat": { "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }], "post": { "operationId": "heartbeatWorker", "requestBody": { "$ref": "#/components/requestBodies/Heartbeat" }, "responses": { "200": { "description": "Heartbeat accepted", "headers": { "X-Workflow-Protocol-Version": { "$ref": "#/components/headers/ProtocolVersion" } } }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/workers/pull": { "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }], "post": { "operationId": "pullWorkerCommand", "requestBody": { "$ref": "#/components/requestBodies/Pull" }, "responses": { "200": { "$ref": "#/components/responses/Pull" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/workers/complete": { "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }], "post": { "operationId": "completeWorkerCommand", "requestBody": { "$ref": "#/components/requestBodies/Complete" }, "responses": { "200": { "$ref": "#/components/responses/Complete" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/worker/execute": { "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }], "post": { "operationId": "executeWorkerTask", "requestBody": { "$ref": "#/components/requestBodies/Execute" }, "responses": { "200": { "$ref": "#/components/responses/Execute" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/worker/poll": { "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }], "post": { "operationId": "pollWorkerTask", "requestBody": { "$ref": "#/components/requestBodies/Poll" }, "responses": { "200": { "$ref": "#/components/responses/Poll" }, "default": { "$ref": "#/components/responses/Error" } } } },
+    "/v1/worker/cancel": { "parameters": [{ "$ref": "#/components/parameters/ProtocolVersion" }], "post": { "operationId": "cancelWorkerTask", "requestBody": { "$ref": "#/components/requestBodies/Cancel" }, "responses": { "200": { "$ref": "#/components/responses/Cancel" }, "default": { "$ref": "#/components/responses/Error" } } } }
   },
   "components": {
+    "parameters": {
+      "ProtocolVersion": { "name": "X-Workflow-Protocol-Version", "in": "header", "required": true, "schema": { "const": "1" } }
+    },
+    "headers": {
+      "ProtocolVersion": { "description": "Negotiated worker protocol version", "schema": { "const": "1" } }
+    },
     "requestBodies": {
       "Register": { "required": true, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/register_request" } } } },
       "Heartbeat": { "required": true, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/heartbeat_request" } } } },
@@ -24,13 +32,14 @@
       "Cancel": { "required": true, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/cancel_request" } } } }
     },
     "responses": {
-      "Register": { "description": "Worker registered", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/register_response" } } } },
-      "Pull": { "description": "Leased command or empty response", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/pull_response" } } } },
-      "Complete": { "description": "Completion accepted", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/complete_response" } } } },
-      "Execute": { "description": "Execution outcome", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/execute_response" } } } },
-      "Poll": { "description": "Poll outcome", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/poll_response" } } } },
-      "Cancel": { "description": "Cancellation outcome", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/cancel_response" } } } },
-      "Error": { "description": "Protocol or transport failure", "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/error_response" } } } }
+      "Register": { "description": "Worker registered", "headers": { "X-Workflow-Protocol-Version": { "$ref": "#/components/headers/ProtocolVersion" } }, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/register_response" } } } },
+      "Pull": { "description": "Leased command or empty response", "headers": { "X-Workflow-Protocol-Version": { "$ref": "#/components/headers/ProtocolVersion" } }, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/pull_response" } } } },
+      "Complete": { "description": "Completion accepted", "headers": { "X-Workflow-Protocol-Version": { "$ref": "#/components/headers/ProtocolVersion" } }, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/complete_response" } } } },
+      "Execute": { "description": "Execution outcome", "headers": { "X-Workflow-Protocol-Version": { "$ref": "#/components/headers/ProtocolVersion" } }, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/execute_response" } } } },
+      "Poll": { "description": "Poll outcome", "headers": { "X-Workflow-Protocol-Version": { "$ref": "#/components/headers/ProtocolVersion" } }, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/poll_response" } } } },
+      "Cancel": { "description": "Cancellation outcome", "headers": { "X-Workflow-Protocol-Version": { "$ref": "#/components/headers/ProtocolVersion" } }, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/cancel_response" } } } },
+      "ProtocolInfo": { "description": "Worker protocol capabilities", "headers": { "X-Workflow-Protocol-Version": { "$ref": "#/components/headers/ProtocolVersion" } }, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/protocol_info" } } } },
+      "Error": { "description": "Protocol or transport failure", "headers": { "X-Workflow-Protocol-Version": { "$ref": "#/components/headers/ProtocolVersion" } }, "content": { "application/json": { "schema": { "$ref": "./worker-protocol.schema.json#/$defs/error_response" } } } }
     }
   }
 }

@@ -53,14 +53,14 @@ func (r *MemoryWorkerRegistry) Register(_ context.Context, worker workerproto.Wo
 	if worker.Transport == "" {
 		worker.Transport = workerproto.TransportCallback
 	}
-	if worker.ProtocolVersion == "" {
-		worker.ProtocolVersion = workerproto.ProtocolVersion
-	}
-	if worker.ProtocolVersion != workerproto.ProtocolVersion {
+	if !workerproto.AcceptsProtocolVersion(worker.ProtocolVersion) {
 		return fmt.Errorf("unsupported worker protocol version: %s", worker.ProtocolVersion)
 	}
 	if worker.Transport != workerproto.TransportCallback && worker.Transport != workerproto.TransportPull {
 		return fmt.Errorf("unsupported worker transport: %s", worker.Transport)
+	}
+	if worker.Transport == workerproto.TransportPull && !workerproto.SupportsPullTransport(worker.ProtocolVersion) {
+		return fmt.Errorf("pull worker requires protocol version %s", workerproto.ProtocolVersion)
 	}
 	if worker.Transport == workerproto.TransportCallback && strings.TrimSpace(worker.Endpoint) == "" {
 		return fmt.Errorf("worker endpoint is required")

@@ -90,9 +90,11 @@ func (s *Service) pullLoop(ctx context.Context, client *RegistrationClient, endp
 			continue
 		}
 		completion := s.executeCommand(ctx, workerID, command)
+		accepted := false
 		for ctx.Err() == nil {
 			err := client.Complete(ctx, endpoint, completion)
 			if err == nil {
+				accepted = true
 				break
 			}
 			var protocolError *ProtocolError
@@ -100,8 +102,14 @@ func (s *Service) pullLoop(ctx context.Context, client *RegistrationClient, endp
 				break
 			}
 			if !waitPullRetry(ctx, retryInterval) {
+				s.discardPullCommand(command.CommandID)
 				return
 			}
+		}
+		if accepted {
+			s.acknowledgePullCommand(command.CommandID)
+		} else {
+			s.discardPullCommand(command.CommandID)
 		}
 	}
 }
@@ -122,6 +130,40 @@ func (s *Service) pullHeartbeatLoop(ctx context.Context, client *RegistrationCli
 }
 
 func (s *Service) executeCommand(parent context.Context, workerID string, command *workerproto.Command) workerproto.CompleteRequest {
+	if command == nil || command.CommandID == "" {
+		return s.executePullCommand(parent, workerID, command)
+	}
+
+	s.pullMu.Lock()
+	if _, ok := s.acknowledged[command.CommandID]; ok {
+		s.pullMu.Unlock()
+		return workerproto.CompleteRequest{WorkerID: workerID, CommandID: command.CommandID}
+	}
+	if entry := s.pullCommands[command.CommandID]; entry != nil {
+		s.pullMu.Unlock()
+		select {
+		case <-parent.Done():
+			return workerproto.CompleteRequest{WorkerID: workerID, CommandID: command.CommandID, Error: parent.Err().Error()}
+		case <-entry.done:
+			return entry.completion
+		}
+	}
+	entry := &pullCommandEntry{done: make(chan struct{})}
+	s.pullCommands[command.CommandID] = entry
+	s.pullMu.Unlock()
+
+	completion := s.executePullCommand(parent, workerID, command)
+	s.pullMu.Lock()
+	entry.completion = completion
+	close(entry.done)
+	s.pullMu.Unlock()
+	return completion
+}
+
+func (s *Service) executePullCommand(parent context.Context, workerID string, command *workerproto.Command) workerproto.CompleteRequest {
+	if command == nil {
+		return workerproto.CompleteRequest{WorkerID: workerID, Error: "pull command is required"}
+	}
 	completion := workerproto.CompleteRequest{WorkerID: workerID, CommandID: command.CommandID}
 	ctx, cancel := commandContext(parent, command.Task)
 	defer cancel()
@@ -155,6 +197,32 @@ func (s *Service) executeCommand(parent context.Context, workerID string, comman
 		completion.Error = fmt.Sprintf("unsupported operation: %s", command.Operation)
 	}
 	return completion
+}
+
+func (s *Service) acknowledgePullCommand(commandID string) {
+	if commandID == "" {
+		return
+	}
+	s.pullMu.Lock()
+	defer s.pullMu.Unlock()
+	delete(s.pullCommands, commandID)
+	if _, exists := s.acknowledged[commandID]; exists {
+		return
+	}
+	s.acknowledged[commandID] = struct{}{}
+	s.ackOrder = append(s.ackOrder, commandID)
+	for len(s.ackOrder) > acknowledgedCommandLimit {
+		oldest := s.ackOrder[0]
+		s.ackOrder[0] = ""
+		s.ackOrder = s.ackOrder[1:]
+		delete(s.acknowledged, oldest)
+	}
+}
+
+func (s *Service) discardPullCommand(commandID string) {
+	s.pullMu.Lock()
+	delete(s.pullCommands, commandID)
+	s.pullMu.Unlock()
 }
 
 func commandContext(parent context.Context, task executor.ExecuteTask) (context.Context, context.CancelFunc) {

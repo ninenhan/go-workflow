@@ -70,6 +70,9 @@ func TestProtocolArtifactsAreValidJSON(t *testing.T) {
 	if !ok || len(definitions) == 0 {
 		t.Fatal("worker protocol schema has no $defs")
 	}
+	if _, ok := schema["anyOf"].([]any); !ok {
+		t.Fatal("worker protocol envelope must use anyOf because execute and poll responses share a wire shape")
+	}
 	walkReferences(t, openAPI, definitions)
 }
 
@@ -80,6 +83,18 @@ func TestCurrentProtocolInfo(t *testing.T) {
 	}
 	if len(info.Transports) != 2 || len(info.Operations) != 3 {
 		t.Fatalf("incomplete protocol capabilities: %+v", info)
+	}
+}
+
+func TestProtocolCapabilityBoundaries(t *testing.T) {
+	if !AcceptsProtocolVersion("") || !AcceptsProtocolVersion(ProtocolVersion) || AcceptsProtocolVersion("999") {
+		t.Fatal("unexpected accepted protocol versions")
+	}
+	if SupportsExecuteReplay("") || !SupportsExecuteReplay(ProtocolVersion) {
+		t.Fatal("versionless callback worker must not inherit execute replay support")
+	}
+	if SupportsPullTransport("") || !SupportsPullTransport(ProtocolVersion) {
+		t.Fatal("pull transport must require an explicit supported version")
 	}
 }
 

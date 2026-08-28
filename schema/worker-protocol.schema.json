@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ninenhan.github.io/go-workflow/schema/worker-protocol.schema.json",
   "title": "go-workflow Worker Protocol v1",
-  "oneOf": [
+  "anyOf": [
     { "$ref": "#/$defs/register_request" },
     { "$ref": "#/$defs/heartbeat_request" },
     { "$ref": "#/$defs/execute_request" },
@@ -15,7 +15,8 @@
     { "$ref": "#/$defs/pull_response" },
     { "$ref": "#/$defs/complete_request" },
     { "$ref": "#/$defs/complete_response" },
-    { "$ref": "#/$defs/error_response" }
+    { "$ref": "#/$defs/error_response" },
+    { "$ref": "#/$defs/protocol_info" }
   ],
   "$defs": {
     "duration": {
@@ -90,7 +91,7 @@
       "allOf": [
         {
           "if": { "required": ["transport"], "properties": { "transport": { "const": "pull" } } },
-          "then": {},
+          "then": { "required": ["protocol_version"], "properties": { "protocol_version": { "const": "1" } } },
           "else": { "required": ["endpoint"], "properties": { "endpoint": { "type": "string", "minLength": 1 } } }
         }
       ],
@@ -210,6 +211,18 @@
         "error": { "type": "string" },
         "code": { "type": "string" },
         "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "protocol_info": {
+      "type": "object",
+      "required": ["version", "duration_unit", "timestamp_format", "transports", "operations"],
+      "properties": {
+        "version": { "const": "1" },
+        "duration_unit": { "const": "nanosecond" },
+        "timestamp_format": { "const": "RFC3339Nano" },
+        "transports": { "type": "array", "items": { "enum": ["callback", "pull"] } },
+        "operations": { "type": "array", "items": { "enum": ["execute", "poll", "cancel"] } }
       },
       "additionalProperties": true
     }

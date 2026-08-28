@@ -22,6 +22,15 @@ Every worker-protocol request sends `X-Workflow-Protocol-Version: 1`. Versionles
 requests remain accepted as a v0 compatibility bridge. An explicitly unsupported
 version receives HTTP 426 with `code=unsupported_protocol_version`.
 
+A callback worker registered without `protocol_version` remains versionless in
+the scheduler registry. It is treated as a legacy worker, so callback transport
+failures are returned without automatically replaying operations. Only an
+`Execute` sent to a worker that explicitly advertises `protocol_version=1` and
+has a non-empty `dispatch_id` may be replayed after a transport failure. `Poll`
+and `Cancel` are not replayed automatically.
+Because pull delivery depends on v1 command and completion idempotency, a pull
+worker must explicitly advertise `protocol_version=1`.
+
 ## Error boundary
 
 HTTP non-2xx responses are protocol or transport failures and use:

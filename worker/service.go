@@ -30,7 +30,11 @@ type Service struct {
 	credentials  credential.Resolver
 	executionMu  sync.Mutex
 	executions   map[string]*executionEntry
-	executionLog []string
+	completed    []string
+	pullMu       sync.Mutex
+	pullCommands map[string]*pullCommandEntry
+	acknowledged map[string]struct{}
+	ackOrder     []string
 }
 
 type executionEntry struct {
@@ -39,7 +43,13 @@ type executionEntry struct {
 	err    error
 }
 
+type pullCommandEntry struct {
+	done       chan struct{}
+	completion workerproto.CompleteRequest
+}
+
 const executionCacheLimit = 2048
+const acknowledgedCommandLimit = 4096
 
 func NewService(opts Options) (*Service, error) {
 	reg := opts.Registry
@@ -52,6 +62,8 @@ func NewService(opts Options) (*Service, error) {
 		unitRegistry: opts.UnitRegistry,
 		credentials:  opts.CredentialResolver,
 		executions:   make(map[string]*executionEntry),
+		pullCommands: make(map[string]*pullCommandEntry),
+		acknowledged: make(map[string]struct{}),
 	}
 	if svc.unitRegistry == nil {
 		// Clone legacy global registrations once for compatibility, then keep all
@@ -149,7 +161,6 @@ func (s *Service) executeOnce(ctx context.Context, task executor.ExecuteTask, ex
 	}
 	entry := &executionEntry{done: make(chan struct{})}
 	s.executions[task.DispatchID] = entry
-	s.executionLog = append(s.executionLog, task.DispatchID)
 	s.executionMu.Unlock()
 
 	result, err := execute()
@@ -158,24 +169,18 @@ func (s *Service) executeOnce(ctx context.Context, task executor.ExecuteTask, ex
 	entry.result = result
 	entry.err = err
 	close(entry.done)
+	s.completed = append(s.completed, task.DispatchID)
 	s.trimExecutionCacheLocked()
 	s.executionMu.Unlock()
 	return result, err
 }
 
 func (s *Service) trimExecutionCacheLocked() {
-	for len(s.executionLog) > executionCacheLimit {
-		oldest := s.executionLog[0]
-		entry := s.executions[oldest]
-		if entry != nil {
-			select {
-			case <-entry.done:
-				delete(s.executions, oldest)
-			default:
-				return
-			}
-		}
-		s.executionLog = s.executionLog[1:]
+	for len(s.completed) > executionCacheLimit {
+		oldest := s.completed[0]
+		s.completed[0] = ""
+		s.completed = s.completed[1:]
+		delete(s.executions, oldest)
 	}
 }
 

@@ -136,10 +136,10 @@ func TestServiceMaintainRegistration(t *testing.T) {
 	go func() {
 		done <- svc.MaintainRegistration(ctx, worker.RegistrationOptions{
 			SchedulerEndpoint: schedulerHTTP.URL,
-			Descriptor: svc.Descriptor(workerproto.WorkerDescriptor{
+			Descriptor: workerproto.WorkerDescriptor{
 				ID:       "worker-loop",
 				Endpoint: "http://worker.loop",
-			}),
+			},
 			Interval: 20 * time.Millisecond,
 		})
 	}()
@@ -160,6 +160,9 @@ func TestServiceMaintainRegistration(t *testing.T) {
 	}
 	if list[0].ID != "worker-loop" {
 		t.Fatalf("unexpected worker id: %s", list[0].ID)
+	}
+	if list[0].ProtocolVersion != workerproto.ProtocolVersion {
+		t.Fatalf("registration did not advertise worker protocol: %+v", list[0])
 	}
 	if list[0].LastHeartbeatAt.IsZero() {
 		t.Fatalf("expected heartbeat timestamp")

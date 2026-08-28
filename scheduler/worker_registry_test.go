@@ -2,12 +2,54 @@ package scheduler
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ninenhan/go-workflow/core/executor"
 	"github.com/ninenhan/go-workflow/core/workerproto"
 )
+
+func TestMemoryWorkerRegistry_PreservesVersionlessCallbackWorker(t *testing.T) {
+	reg := NewMemoryWorkerRegistry()
+	if err := reg.Register(context.Background(), workerproto.WorkerDescriptor{
+		ID:       "legacy-callback",
+		Endpoint: "http://legacy",
+	}); err != nil {
+		t.Fatalf("register legacy callback worker: %v", err)
+	}
+
+	workers, err := reg.List(context.Background())
+	if err != nil {
+		t.Fatalf("list workers: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("unexpected worker count: %d", len(workers))
+	}
+	if workers[0].Transport != workerproto.TransportCallback || workers[0].ProtocolVersion != "" {
+		t.Fatalf("legacy capability was changed: %+v", workers[0])
+	}
+}
+
+func TestMemoryWorkerRegistry_RequiresVersionOneForPullWorker(t *testing.T) {
+	reg := NewMemoryWorkerRegistry()
+	err := reg.Register(context.Background(), workerproto.WorkerDescriptor{
+		ID:        "versionless-pull",
+		Transport: workerproto.TransportPull,
+	})
+	if err == nil || !strings.Contains(err.Error(), "pull worker requires protocol version 1") {
+		t.Fatalf("expected explicit pull protocol version error, got %v", err)
+	}
+
+	err = reg.Register(context.Background(), workerproto.WorkerDescriptor{
+		ID:              "v1-pull",
+		Transport:       workerproto.TransportPull,
+		ProtocolVersion: workerproto.ProtocolVersion,
+	})
+	if err != nil {
+		t.Fatalf("register v1 pull worker: %v", err)
+	}
+}
 
 func TestMemoryWorkerRegistry_AcquireForTaskWithLabelsAndCapacity(t *testing.T) {
 	reg := NewMemoryWorkerRegistry()

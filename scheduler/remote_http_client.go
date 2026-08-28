@@ -38,7 +38,8 @@ func NewRemoteHTTPClient(client *http.Client) *RemoteHTTPClient {
 
 func (c *RemoteHTTPClient) Execute(ctx context.Context, worker workerproto.WorkerDescriptor, task executor.ExecuteTask) (executor.ExecuteResult, error) {
 	var resp workerproto.ExecuteResponse
-	err := c.postJSON(ctx, worker.Endpoint, workerproto.DefaultExecutePath, workerproto.ExecuteRequest{Task: task}, &resp, task.DispatchID != "")
+	retryTransport := workerproto.SupportsExecuteReplay(worker.ProtocolVersion) && task.DispatchID != ""
+	err := c.postJSON(ctx, worker.Endpoint, workerproto.DefaultExecutePath, workerproto.ExecuteRequest{Task: task}, &resp, retryTransport)
 	return resp.Result, err
 }
 
@@ -47,7 +48,7 @@ func (c *RemoteHTTPClient) Poll(ctx context.Context, worker workerproto.WorkerDe
 	err := c.postJSON(ctx, worker.Endpoint, workerproto.DefaultPollPath, workerproto.PollRequest{
 		Task:           task,
 		ExternalTaskID: externalTaskID,
-	}, &resp, true)
+	}, &resp, false)
 	return resp.Result, err
 }
 
@@ -56,7 +57,7 @@ func (c *RemoteHTTPClient) Cancel(ctx context.Context, worker workerproto.Worker
 	err := c.postJSON(ctx, worker.Endpoint, workerproto.DefaultCancelPath, workerproto.CancelRequest{
 		Task:           task,
 		ExternalTaskID: externalTaskID,
-	}, &resp, true)
+	}, &resp, false)
 	if err != nil {
 		return err
 	}
@@ -111,7 +112,7 @@ func (c *RemoteHTTPClient) postJSON(ctx context.Context, endpoint, path string, 
 		}
 		return fmt.Errorf("remote call %s failed: status=%d body=%s", path, resp.StatusCode, string(raw))
 	}
-	if version := resp.Header.Get(workerproto.ProtocolHeader); version != "" && version != workerproto.ProtocolVersion {
+	if version := resp.Header.Get(workerproto.ProtocolHeader); !workerproto.AcceptsProtocolVersion(version) {
 		return fmt.Errorf("remote worker protocol version mismatch: %s", version)
 	}
 	if out == nil || len(raw) == 0 {

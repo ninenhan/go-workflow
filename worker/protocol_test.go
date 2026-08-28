@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -62,6 +63,54 @@ func TestServiceExecuteTaskIsIdempotentByDispatchID(t *testing.T) {
 	}
 	if calls := impl.calls.Load(); calls != 1 {
 		t.Fatalf("executor called %d times", calls)
+	}
+}
+
+func TestServiceExecutionCacheRemainsBoundedBehindInflightTask(t *testing.T) {
+	svc, err := NewService(Options{Enabled: true})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = svc.executeOnce(context.Background(), executor.ExecuteTask{DispatchID: "inflight"}, func() (executor.ExecuteResult, error) {
+			close(started)
+			<-release
+			return executor.ExecuteResult{Status: executor.StatusSucceeded}, nil
+		})
+	}()
+	<-started
+
+	for i := 0; i <= executionCacheLimit; i++ {
+		dispatchID := fmt.Sprintf("completed-%d", i)
+		_, err := svc.executeOnce(context.Background(), executor.ExecuteTask{DispatchID: dispatchID}, func() (executor.ExecuteResult, error) {
+			return executor.ExecuteResult{Status: executor.StatusSucceeded}, nil
+		})
+		if err != nil {
+			t.Fatalf("complete %s: %v", dispatchID, err)
+		}
+	}
+
+	svc.executionMu.Lock()
+	entries := len(svc.executions)
+	completed := len(svc.completed)
+	svc.executionMu.Unlock()
+	if entries != executionCacheLimit+1 || completed != executionCacheLimit {
+		t.Fatalf("cache exceeded bound: entries=%d completed=%d", entries, completed)
+	}
+
+	close(release)
+	<-done
+	svc.executionMu.Lock()
+	entries = len(svc.executions)
+	completed = len(svc.completed)
+	svc.executionMu.Unlock()
+	if entries != executionCacheLimit || completed != executionCacheLimit {
+		t.Fatalf("completed cache exceeded bound: entries=%d completed=%d", entries, completed)
 	}
 }
 
