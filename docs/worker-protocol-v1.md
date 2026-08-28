@@ -58,6 +58,16 @@ effects should also pass `dispatch_id` to the downstream system as its
 idempotency key; no in-memory worker cache can provide exactly-once effects
 across a process crash.
 
+Go Units read this runtime identity from their existing execution context:
+
+```go
+dispatchID := workerunit.DispatchID(ctx)
+```
+
+The adapter does not add `dispatch_id` to workflow variables, Unit params, node
+input, or output. A Unit that requires crash-safe external effects should reject
+an empty value rather than manufacture another identity.
+
 The canonical schema is `schema/worker-protocol.schema.json`; the HTTP operation
 surface is `schema/worker-protocol.openapi.json`. Language SDKs should be tested
 against the fixtures under `core/workerproto/testdata`.

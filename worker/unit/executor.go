@@ -53,6 +53,7 @@ func (e *Executor) Execute(ctx context.Context, task executor.ExecuteTask) (exec
 	if err != nil {
 		return executor.ExecuteResult{}, fmt.Errorf("prepare unit credentials: %w", err)
 	}
+	executionContext = withDispatchID(executionContext, task.DispatchID)
 
 	res, err := execImpl.Execute(executionContext, buildContext(task.Context), &Node{
 		ID:     task.NodeID,

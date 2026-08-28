@@ -31,6 +31,24 @@ type configuredUnit struct {
 	Message string `json:"message"`
 }
 
+type dispatchAwareUnit struct {
+	Unit
+	observed *string
+}
+
+func (u *dispatchAwareUnit) GetUnitMeta() *Unit { return &u.Unit }
+
+func (u *dispatchAwareUnit) Execute(ctx context.Context, state ContextMap, self *Node) (*ExecutionResult, error) {
+	*u.observed = DispatchID(ctx)
+	if _, exists := state["dispatch_id"]; exists {
+		return nil, errors.New("dispatch_id leaked into workflow context")
+	}
+	if _, exists := self.Params["dispatch_id"]; exists {
+		return nil, errors.New("dispatch_id leaked into unit params")
+	}
+	return SimpleResult("ok"), nil
+}
+
 func (u *configuredUnit) GetUnitName() string { return "ConfiguredUnit" }
 
 func (u *configuredUnit) GetUnitMeta() *Unit { return &u.Unit }
@@ -130,5 +148,32 @@ func TestExecutorExecute_PreservesClassifiedFailureDisposition(t *testing.T) {
 				t.Fatalf("unexpected classified result: %#v", result)
 			}
 		})
+	}
+}
+
+func TestExecutorExecute_ExposesDispatchIDThroughContext(t *testing.T) {
+	var observed string
+	reg := NewRegistry()
+	if err := reg.RegisterUnitFactory("DispatchAwareUnit", func() ExecutableUnit {
+		return &dispatchAwareUnit{observed: &observed}
+	}); err != nil {
+		t.Fatalf("register unit: %v", err)
+	}
+
+	result, err := NewExecutor(reg).Execute(context.Background(), executor.ExecuteTask{
+		DispatchID:   "dispatch-1",
+		RunID:        "run-1",
+		NodeID:       "node-1",
+		ExecutorType: string(executor.TypeUnit),
+		ExecutorRef:  "DispatchAwareUnit",
+	})
+	if err != nil {
+		t.Fatalf("execute unit: %v", err)
+	}
+	if result.Status != executor.StatusSucceeded || observed != "dispatch-1" {
+		t.Fatalf("unexpected result=%+v dispatch_id=%q", result, observed)
+	}
+	if got := DispatchID(context.Background()); got != "" {
+		t.Fatalf("context without dispatch_id returned %q", got)
 	}
 }
