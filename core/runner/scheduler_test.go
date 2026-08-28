@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -155,6 +156,165 @@ func TestDefaultScheduler_RecoversInterruptedTaskAttempt(t *testing.T) {
 	}
 	if len(events) == 0 || events[0].Type != wfruntime.EventRunResumed {
 		t.Fatalf("first recovery event = %#v", events)
+	}
+}
+
+func TestDefaultScheduler_ConcurrencyGroupLimitsOnlyItsTasks(t *testing.T) {
+	reg := executor.NewRegistry()
+	local := executor.NewLocalExecutor()
+	var groupActive atomic.Int32
+	var groupMaximum atomic.Int32
+	var totalActive atomic.Int32
+	var totalMaximum atomic.Int32
+	local.Register("grouped", func(ctx context.Context, req executor.Request) (executor.Result, error) {
+		total := totalActive.Add(1)
+		defer totalActive.Add(-1)
+		updateAtomicMaximum(&totalMaximum, total)
+		if strings.HasPrefix(req.NodeID, "group-") {
+			active := groupActive.Add(1)
+			defer groupActive.Add(-1)
+			updateAtomicMaximum(&groupMaximum, active)
+		}
+		select {
+		case <-ctx.Done():
+			return executor.Result{}, ctx.Err()
+		case <-time.After(30 * time.Millisecond):
+			return executor.Result{Output: req.NodeID}, nil
+		}
+	})
+	if err := reg.Register(local); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := independentCapacityPlan("grouped", 6)
+	plan.ConcurrencyGroups = map[string]int{"browser": 2}
+	for _, id := range []string{"group-1", "group-2", "group-3", "group-4"} {
+		node := plan.Nodes[id]
+		node.ConcurrencyGroup = "browser"
+		plan.Nodes[id] = node
+	}
+	run, err := NewDefaultScheduler(reg, wfruntime.NewMemoryStore()).Run(context.Background(), plan, nil)
+	if err != nil || run.Status != wfruntime.StatusSuccess {
+		t.Fatalf("run grouped tasks: status=%s err=%v", run.Status, err)
+	}
+	if groupMaximum.Load() != 2 {
+		t.Fatalf("group maximum = %d, want 2", groupMaximum.Load())
+	}
+	if totalMaximum.Load() != 4 {
+		t.Fatalf("total maximum = %d, want 4 (two grouped plus two ungrouped)", totalMaximum.Load())
+	}
+}
+
+func TestDefaultScheduler_ResourcePoolIsSharedAcrossRuns(t *testing.T) {
+	reg := executor.NewRegistry()
+	local := executor.NewLocalExecutor()
+	var active atomic.Int32
+	var maximum atomic.Int32
+	local.Register("pooled", func(ctx context.Context, req executor.Request) (executor.Result, error) {
+		current := active.Add(1)
+		defer active.Add(-1)
+		updateAtomicMaximum(&maximum, current)
+		select {
+		case <-ctx.Done():
+			return executor.Result{}, ctx.Err()
+		case <-time.After(40 * time.Millisecond):
+			return executor.Result{Output: req.NodeID}, nil
+		}
+	})
+	if err := reg.Register(local); err != nil {
+		t.Fatal(err)
+	}
+
+	scheduler := NewDefaultScheduler(reg, wfruntime.NewMemoryStore())
+	plan := independentCapacityPlan("pooled", 1)
+	plan.ResourcePools = map[string]int{"chromium": 1}
+	node := plan.Nodes[plan.TopologicalOrder[0]]
+	node.ResourcePool = "chromium"
+	plan.Nodes[node.ID] = node
+
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			run, err := scheduler.Run(context.Background(), plan, nil)
+			if err == nil && run.Status != wfruntime.StatusSuccess {
+				err = fmt.Errorf("run status %s", run.Status)
+			}
+			results <- err
+		}()
+	}
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("run pooled task: %v", err)
+		}
+	}
+	if maximum.Load() != 1 {
+		t.Fatalf("shared resource maximum = %d, want 1", maximum.Load())
+	}
+}
+
+func TestDefaultScheduler_ResourcePoolReleasesBeforeRetry(t *testing.T) {
+	reg := executor.NewRegistry()
+	local := executor.NewLocalExecutor()
+	var calls atomic.Int32
+	var active atomic.Int32
+	var maximum atomic.Int32
+	local.Register("pooled-retry", func(context.Context, executor.Request) (executor.Result, error) {
+		current := active.Add(1)
+		defer active.Add(-1)
+		updateAtomicMaximum(&maximum, current)
+		if calls.Add(1) == 1 {
+			return executor.Result{Status: executor.StatusRetryable, Error: "retry", RetryAfter: time.Nanosecond}, nil
+		}
+		return executor.Result{Output: "ok"}, nil
+	})
+	if err := reg.Register(local); err != nil {
+		t.Fatal(err)
+	}
+	plan := independentCapacityPlan("pooled-retry", 2)
+	plan.ResourcePools = map[string]int{"chromium": 1}
+	for id, node := range plan.Nodes {
+		node.ResourcePool = "chromium"
+		node.Retry = planning.RetryPolicy{MaxAttempts: 2, Backoff: time.Nanosecond, MaxBackoff: time.Microsecond}
+		plan.Nodes[id] = node
+	}
+	run, err := NewDefaultScheduler(reg, wfruntime.NewMemoryStore()).Run(context.Background(), plan, nil)
+	if err != nil || run.Status != wfruntime.StatusSuccess {
+		t.Fatalf("run pooled retry: status=%s err=%v", run.Status, err)
+	}
+	if calls.Load() != 3 || maximum.Load() != 1 {
+		t.Fatalf("calls=%d maximum=%d, want calls=3 maximum=1", calls.Load(), maximum.Load())
+	}
+}
+
+func independentCapacityPlan(ref string, count int) *planning.ExecutionPlan {
+	nodes := make(map[string]planning.PlanNode, count)
+	dependencies := make(map[string][]string, count)
+	order := make([]string, 0, count)
+	for index := 1; index <= count; index++ {
+		prefix := "group-"
+		if index > 4 {
+			prefix = "free-"
+		}
+		id := fmt.Sprintf("%s%d", prefix, index)
+		order = append(order, id)
+		nodes[id] = planning.PlanNode{
+			ID: id, ExecutorType: string(executor.TypeLocalGo), ExecutorRef: ref,
+			Params: map[string]any{"fn": ref}, Retry: planning.RetryPolicy{MaxAttempts: 1},
+		}
+		dependencies[id] = []string{}
+	}
+	return &planning.ExecutionPlan{
+		PlanID: "plan-" + ref, WorkflowID: "wf-" + ref, WorkflowVersionID: "v1",
+		MaxConcurrency: count, TopologicalOrder: order, Dependencies: dependencies, Nodes: nodes,
+	}
+}
+
+func updateAtomicMaximum(maximum *atomic.Int32, current int32) {
+	for {
+		observed := maximum.Load()
+		if current <= observed || maximum.CompareAndSwap(observed, current) {
+			return
+		}
 	}
 }
 

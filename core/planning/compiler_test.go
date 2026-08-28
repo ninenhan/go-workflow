@@ -1022,3 +1022,61 @@ func TestCompilerCompile_ParallelGatewayRejectsExecutionFields(t *testing.T) {
 		t.Fatalf("expected strict gateway validation, got %v", err)
 	}
 }
+
+func TestCompilerCompile_NodeConcurrencyAndResourcePools(t *testing.T) {
+	task := func(id string) definition.Node {
+		return definition.Node{
+			ID:               id,
+			Executor:         definition.ExecutorSpec{Type: definition.ExecutorTypeUnit, Ref: "LogUnit"},
+			ConcurrencyGroup: "browser",
+			ConcurrencyLimit: 2,
+			ResourcePool:     "chromium",
+			ResourceCapacity: 3,
+		}
+	}
+	plan, err := NewCompiler().Compile(&definition.WorkflowVersion{
+		ID: "v-capacity", WorkflowID: "wf-capacity", Version: 1,
+		Definition: &definition.WorkflowDefinition{
+			ID: "wf-capacity", MaxConcurrency: 8,
+			Nodes: []definition.Node{task("a"), task("b")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("compile capacities: %v", err)
+	}
+	if plan.ConcurrencyGroups["browser"] != 2 || plan.ResourcePools["chromium"] != 3 {
+		t.Fatalf("compiled capacities = groups %#v pools %#v", plan.ConcurrencyGroups, plan.ResourcePools)
+	}
+	if plan.Nodes["a"].ConcurrencyGroup != "browser" || plan.Nodes["a"].ResourcePool != "chromium" {
+		t.Fatalf("compiled node constraints = %#v", plan.Nodes["a"])
+	}
+}
+
+func TestCompilerCompile_RejectsInvalidNodeConcurrency(t *testing.T) {
+	task := func(id string, limit int) definition.Node {
+		return definition.Node{
+			ID: id, Executor: definition.ExecutorSpec{Type: definition.ExecutorTypeUnit, Ref: "LogUnit"},
+			ConcurrencyGroup: "browser", ConcurrencyLimit: limit,
+		}
+	}
+	tests := []struct {
+		name  string
+		nodes []definition.Node
+		want  string
+	}{
+		{name: "missing group", nodes: []definition.Node{{ID: "a", Executor: definition.ExecutorSpec{Type: definition.ExecutorTypeUnit, Ref: "LogUnit"}, ConcurrencyLimit: 1}}, want: "requires concurrency_group"},
+		{name: "conflicting limit", nodes: []definition.Node{task("a", 1), task("b", 2)}, want: "conflicting limits"},
+		{name: "gateway resource", nodes: []definition.Node{{ID: "gateway", Type: definition.NodeTypeParallelGateway, ResourcePool: "browser", ResourceCapacity: 1}}, want: "only contain control-flow and UI fields"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewCompiler().Compile(&definition.WorkflowVersion{
+				ID: "v-invalid", WorkflowID: "wf-invalid", Version: 1,
+				Definition: &definition.WorkflowDefinition{ID: "wf-invalid", Nodes: test.nodes},
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q, got %v", test.want, err)
+			}
+		})
+	}
+}

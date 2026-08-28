@@ -6,8 +6,8 @@ use it as a fork, a join, or a combined join+fork.
 
 Gateway is a control-flow node. Its JSON contains `id`, `name`,
 `type: "parallel_gateway"`, and optional editor `ui` data. It cannot contain an
-`executor`, input, params, dependencies, retry, loop, timeout, branch policy, or
-disabled/business state. Task nodes keep the existing shape and each task still
+`executor`, input, params, dependencies, concurrency group, resource pool,
+retry, loop, timeout, branch policy, or disabled/business state. Task nodes keep the existing shape and each task still
 resolves exactly one leaf executor/Unit.
 
 ```json

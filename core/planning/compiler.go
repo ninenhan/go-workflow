@@ -55,6 +55,8 @@ func (c *DefaultCompiler) Compile(version *definition.WorkflowVersion) (*Executi
 	}
 
 	nodes := make(map[string]PlanNode, len(def.Nodes))
+	concurrencyGroups := make(map[string]int)
+	resourcePools := make(map[string]int)
 	adjacency := make(map[string][]string, len(def.Nodes))
 	dependencies := make(map[string][]string, len(def.Nodes))
 	flowDependencies := make(map[string][]string, len(def.Nodes))
@@ -71,26 +73,34 @@ func (c *DefaultCompiler) Compile(version *definition.WorkflowVersion) (*Executi
 			retry = RetryPolicy(*node.Retry)
 		}
 		planNode := PlanNode{
-			ID:              node.ID,
-			Name:            node.Name,
-			Type:            node.Type,
-			ExecutorType:    node.Executor.Type,
-			ExecutorRef:     node.Executor.Ref,
-			ExecutorConf:    cloneMap(node.Executor.Config),
-			Input:           node.Input,
-			InputSpec:       cloneInputSpec(node.InputSpec),
-			Params:          cloneMap(node.Params),
-			ParamBindings:   cloneParamBindings(node.ParamBindings),
-			ParamTemplates:  cloneParamTemplates(node.ParamTemplates),
-			Retry:           retry,
-			Loop:            cloneLoop(node.Loop),
-			Timeout:         node.Timeout,
-			ContinueOnError: boolFromMap(node.Params, "continue_on_error"),
+			ID:               node.ID,
+			Name:             node.Name,
+			Type:             node.Type,
+			ExecutorType:     node.Executor.Type,
+			ExecutorRef:      node.Executor.Ref,
+			ExecutorConf:     cloneMap(node.Executor.Config),
+			Input:            node.Input,
+			InputSpec:        cloneInputSpec(node.InputSpec),
+			Params:           cloneMap(node.Params),
+			ParamBindings:    cloneParamBindings(node.ParamBindings),
+			ParamTemplates:   cloneParamTemplates(node.ParamTemplates),
+			ConcurrencyGroup: node.ConcurrencyGroup,
+			ResourcePool:     node.ResourcePool,
+			Retry:            retry,
+			Loop:             cloneLoop(node.Loop),
+			Timeout:          node.Timeout,
+			ContinueOnError:  boolFromMap(node.Params, "continue_on_error"),
 		}
 		if err := rebindDisabledInputs(node, &planNode, disabledNodes, disabledSources); err != nil {
 			return nil, err
 		}
 		nodes[node.ID] = planNode
+		if node.ConcurrencyGroup != "" {
+			concurrencyGroups[node.ConcurrencyGroup] = node.ConcurrencyLimit
+		}
+		if node.ResourcePool != "" {
+			resourcePools[node.ResourcePool] = node.ResourceCapacity
+		}
 		adjacency[node.ID] = []string{}
 		dependencies[node.ID] = []string{}
 		flowDependencies[node.ID] = []string{}
@@ -215,6 +225,8 @@ func (c *DefaultCompiler) Compile(version *definition.WorkflowVersion) (*Executi
 		WorkflowVersionID: version.ID,
 		MaxConcurrency:    def.MaxConcurrency,
 		FailFast:          def.FailFast,
+		ConcurrencyGroups: cloneIntMap(concurrencyGroups),
+		ResourcePools:     cloneIntMap(resourcePools),
 		EntryNodes:        append([]string{}, entry...),
 		ExitNodes:         exit,
 		Adjacency:         adjacency,
@@ -896,13 +908,18 @@ func validateDefinition(def *definition.WorkflowDefinition) error {
 		if node.IsParallelGateway() {
 			if node.Disabled || !node.Executor.IsZero() || node.Input != nil || node.InputSpec != nil ||
 				len(node.Params) > 0 || len(node.ParamBindings) > 0 || len(node.ParamTemplates) > 0 ||
-				len(node.DependsOn) > 0 || node.Retry != nil || node.Loop != nil || node.Timeout != 0 || node.Branch != nil {
+				len(node.DependsOn) > 0 || node.ConcurrencyGroup != "" || node.ConcurrencyLimit != 0 ||
+				node.ResourcePool != "" || node.ResourceCapacity != 0 || node.Retry != nil ||
+				node.Loop != nil || node.Timeout != 0 || node.Branch != nil {
 				return fmt.Errorf("parallel gateway %s can only contain control-flow and UI fields", node.ID)
 			}
 		} else if node.Type != "" && node.Type != definition.NodeTypeTask {
 			return fmt.Errorf("node %s has unsupported type %q", node.ID, node.Type)
 		} else if node.Executor.Type == "" {
 			return fmt.Errorf("node %s missing executor type", node.ID)
+		}
+		if err := validateNodeConcurrency(node); err != nil {
+			return err
 		}
 		if node.Retry != nil {
 			if node.Retry.MaxAttempts < 0 || node.Retry.MaxAttempts > MaxNodeRetryAttempts {
@@ -938,7 +955,68 @@ func validateDefinition(def *definition.WorkflowDefinition) error {
 		}
 		seen[node.ID] = struct{}{}
 	}
+	if err := validateNamedCapacities(def.Nodes); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateNodeConcurrency(node definition.Node) error {
+	group := strings.TrimSpace(node.ConcurrencyGroup)
+	if group != node.ConcurrencyGroup {
+		return fmt.Errorf("node %s concurrency_group cannot contain surrounding whitespace", node.ID)
+	}
+	if group == "" && node.ConcurrencyLimit != 0 {
+		return fmt.Errorf("node %s concurrency_limit requires concurrency_group", node.ID)
+	}
+	if group != "" && (node.ConcurrencyLimit < 1 || node.ConcurrencyLimit > MaxWorkflowConcurrency) {
+		return fmt.Errorf("node %s concurrency_limit must be between 1 and %d", node.ID, MaxWorkflowConcurrency)
+	}
+	pool := strings.TrimSpace(node.ResourcePool)
+	if pool != node.ResourcePool {
+		return fmt.Errorf("node %s resource_pool cannot contain surrounding whitespace", node.ID)
+	}
+	if pool == "" && node.ResourceCapacity != 0 {
+		return fmt.Errorf("node %s resource_capacity requires resource_pool", node.ID)
+	}
+	if pool != "" && (node.ResourceCapacity < 1 || node.ResourceCapacity > MaxWorkflowConcurrency) {
+		return fmt.Errorf("node %s resource_capacity must be between 1 and %d", node.ID, MaxWorkflowConcurrency)
+	}
+	return nil
+}
+
+func validateNamedCapacities(nodes []definition.Node) error {
+	groups := make(map[string]int)
+	pools := make(map[string]int)
+	for _, node := range nodes {
+		if node.Disabled || node.IsParallelGateway() {
+			continue
+		}
+		if node.ConcurrencyGroup != "" {
+			if limit, exists := groups[node.ConcurrencyGroup]; exists && limit != node.ConcurrencyLimit {
+				return fmt.Errorf("concurrency group %s has conflicting limits %d and %d", node.ConcurrencyGroup, limit, node.ConcurrencyLimit)
+			}
+			groups[node.ConcurrencyGroup] = node.ConcurrencyLimit
+		}
+		if node.ResourcePool != "" {
+			if capacity, exists := pools[node.ResourcePool]; exists && capacity != node.ResourceCapacity {
+				return fmt.Errorf("resource pool %s has conflicting capacities %d and %d", node.ResourcePool, capacity, node.ResourceCapacity)
+			}
+			pools[node.ResourcePool] = node.ResourceCapacity
+		}
+	}
+	return nil
+}
+
+func cloneIntMap(values map[string]int) map[string]int {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]int, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func topoSort(nodes map[string]PlanNode, adjacency map[string][]string, indegree map[string]int) ([]string, error) {

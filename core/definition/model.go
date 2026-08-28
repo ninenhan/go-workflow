@@ -61,23 +61,27 @@ type LoopGroup struct {
 }
 
 type Node struct {
-	ID             string                   `json:"id"`
-	Name           string                   `json:"name"`
-	Description    string                   `json:"description,omitempty"`
-	Type           string                   `json:"type,omitempty"`
-	Executor       ExecutorSpec             `json:"executor,omitzero"`
-	Input          any                      `json:"input,omitempty"`
-	InputSpec      *InputSpec               `json:"input_spec,omitempty"`
-	Params         map[string]any           `json:"params,omitempty"`
-	ParamBindings  map[string]InputBinding  `json:"param_bindings,omitempty"`
-	ParamTemplates map[string]ParamTemplate `json:"param_templates,omitempty"`
-	DependsOn      []string                 `json:"depends_on,omitempty"`
-	Retry          *RetryPolicy             `json:"retry,omitempty"`
-	Loop           *LoopPolicy              `json:"loop,omitempty"`
-	Timeout        time.Duration            `json:"timeout,omitempty"`
-	Branch         *BranchPolicy            `json:"branch,omitempty"`
-	Disabled       bool                     `json:"disabled,omitempty"`
-	UI             map[string]any           `json:"ui,omitempty"` // editor-only data, removed by compiler
+	ID               string                   `json:"id"`
+	Name             string                   `json:"name"`
+	Description      string                   `json:"description,omitempty"`
+	Type             string                   `json:"type,omitempty"`
+	Executor         ExecutorSpec             `json:"executor,omitzero"`
+	Input            any                      `json:"input,omitempty"`
+	InputSpec        *InputSpec               `json:"input_spec,omitempty"`
+	Params           map[string]any           `json:"params,omitempty"`
+	ParamBindings    map[string]InputBinding  `json:"param_bindings,omitempty"`
+	ParamTemplates   map[string]ParamTemplate `json:"param_templates,omitempty"`
+	DependsOn        []string                 `json:"depends_on,omitempty"`
+	ConcurrencyGroup string                   `json:"concurrency_group,omitempty"`
+	ConcurrencyLimit int                      `json:"concurrency_limit,omitempty"`
+	ResourcePool     string                   `json:"resource_pool,omitempty"`
+	ResourceCapacity int                      `json:"resource_capacity,omitempty"`
+	Retry            *RetryPolicy             `json:"retry,omitempty"`
+	Loop             *LoopPolicy              `json:"loop,omitempty"`
+	Timeout          time.Duration            `json:"timeout,omitempty"`
+	Branch           *BranchPolicy            `json:"branch,omitempty"`
+	Disabled         bool                     `json:"disabled,omitempty"`
+	UI               map[string]any           `json:"ui,omitempty"` // editor-only data, removed by compiler
 }
 
 const (

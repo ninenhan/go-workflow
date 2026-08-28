@@ -520,6 +520,7 @@ curl -X POST http://127.0.0.1:8080/api/doc-demo \
 ## 文档
 
 - [Parallel Gateway](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/parallel-gateway.md)
+- [Concurrency Groups and Resource Pools](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/concurrency-resources.md)
 - [Quickstart](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/quickstart.md)
 - [Three Part Architecture](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/three-part-architecture.md)
 - [Control Plane API](/Users/freddon/Lab/go_modules/github.com/go-workflow/docs/control-plane-api.md)

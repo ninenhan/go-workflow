@@ -35,6 +35,7 @@ type Options struct {
 	DispatchMode           DispatchMode
 	ResultReporter         runner.ResultReporter
 	HeartbeatReporter      runner.HeartbeatReporter
+	ResourcePools          runner.ResourcePoolCoordinator
 	Credentials            credential.Store
 	DefaultCredentialScope string
 	Automations            AutomationStore
@@ -114,6 +115,9 @@ func NewService(opts Options) (*Service, error) {
 
 	scheduler := runner.NewDefaultScheduler(reg, store)
 	scheduler.RunController = controller
+	if opts.ResourcePools != nil {
+		scheduler.ResourcePools = opts.ResourcePools
+	}
 	dispatcher := NewHybridDispatcher(reg, workers, nil)
 	if opts.DispatchMode != "" {
 		dispatcher.Mode = opts.DispatchMode

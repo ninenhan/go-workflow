@@ -38,6 +38,8 @@ type ExecutionPlan struct {
 	WorkflowVersionID string                `json:"workflow_version_id"`
 	MaxConcurrency    int                   `json:"max_concurrency"`
 	FailFast          bool                  `json:"fail_fast,omitempty"`
+	ConcurrencyGroups map[string]int        `json:"concurrency_groups,omitempty"`
+	ResourcePools     map[string]int        `json:"resource_pools,omitempty"`
 	EntryNodes        []string              `json:"entry_nodes"`
 	ExitNodes         []string              `json:"exit_nodes"`
 	Adjacency         map[string][]string   `json:"adjacency"`
@@ -63,21 +65,23 @@ type LoopGroup struct {
 }
 
 type PlanNode struct {
-	ID              string                   `json:"id"`
-	Name            string                   `json:"name"`
-	Type            string                   `json:"type,omitempty"`
-	ExecutorType    string                   `json:"executor_type"`
-	ExecutorRef     string                   `json:"executor_ref,omitempty"`
-	ExecutorConf    map[string]any           `json:"executor_conf,omitempty"`
-	Input           any                      `json:"input,omitempty"`
-	InputSpec       *InputSpec               `json:"input_spec,omitempty"`
-	Params          map[string]any           `json:"params,omitempty"`
-	ParamBindings   map[string]InputBinding  `json:"param_bindings,omitempty"`
-	ParamTemplates  map[string]ParamTemplate `json:"param_templates,omitempty"`
-	Retry           RetryPolicy              `json:"retry,omitempty"`
-	Loop            *LoopPolicy              `json:"loop,omitempty"`
-	Timeout         time.Duration            `json:"timeout,omitempty"`
-	ContinueOnError bool                     `json:"continue_on_error,omitempty"`
+	ID               string                   `json:"id"`
+	Name             string                   `json:"name"`
+	Type             string                   `json:"type,omitempty"`
+	ExecutorType     string                   `json:"executor_type"`
+	ExecutorRef      string                   `json:"executor_ref,omitempty"`
+	ExecutorConf     map[string]any           `json:"executor_conf,omitempty"`
+	Input            any                      `json:"input,omitempty"`
+	InputSpec        *InputSpec               `json:"input_spec,omitempty"`
+	Params           map[string]any           `json:"params,omitempty"`
+	ParamBindings    map[string]InputBinding  `json:"param_bindings,omitempty"`
+	ParamTemplates   map[string]ParamTemplate `json:"param_templates,omitempty"`
+	ConcurrencyGroup string                   `json:"concurrency_group,omitempty"`
+	ResourcePool     string                   `json:"resource_pool,omitempty"`
+	Retry            RetryPolicy              `json:"retry,omitempty"`
+	Loop             *LoopPolicy              `json:"loop,omitempty"`
+	Timeout          time.Duration            `json:"timeout,omitempty"`
+	ContinueOnError  bool                     `json:"continue_on_error,omitempty"`
 }
 
 type InputSpec struct {

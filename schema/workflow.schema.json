@@ -235,6 +235,24 @@
             "type": "string"
           }
         },
+        "concurrency_group": {
+          "type": "string",
+          "minLength": 1
+        },
+        "concurrency_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "resource_pool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resource_capacity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
         "retry": {
           "$ref": "#/$defs/retryPolicy"
         },
@@ -278,6 +296,10 @@
                 { "required": ["input_spec"] },
                 { "required": ["params"] },
                 { "required": ["depends_on"] },
+                { "required": ["concurrency_group"] },
+                { "required": ["concurrency_limit"] },
+                { "required": ["resource_pool"] },
+                { "required": ["resource_capacity"] },
                 { "required": ["retry"] },
                 { "required": ["loop"] },
                 { "required": ["timeout"] },
@@ -287,8 +309,18 @@
             }
           },
           "else": {
-            "required": [
-              "executor"
+            "required": ["executor"],
+            "allOf": [
+              {
+                "if": { "required": ["concurrency_group"] },
+                "then": { "required": ["concurrency_limit"] },
+                "else": { "not": { "required": ["concurrency_limit"] } }
+              },
+              {
+                "if": { "required": ["resource_pool"] },
+                "then": { "required": ["resource_capacity"] },
+                "else": { "not": { "required": ["resource_capacity"] } }
+              }
             ]
           }
         }

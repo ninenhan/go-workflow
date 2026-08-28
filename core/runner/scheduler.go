@@ -28,6 +28,7 @@ type DefaultScheduler struct {
 	ResultReporter     ResultReporter
 	HeartbeatReporter  HeartbeatReporter
 	RunController      RunController
+	ResourcePools      ResourcePoolCoordinator
 }
 
 const (
@@ -47,6 +48,7 @@ func NewDefaultScheduler(executors *executor.Registry, store wfruntime.Store) *D
 		Store:              store,
 		ResultReporter:     &NopResultReporter{},
 		HeartbeatReporter:  &NopHeartbeatReporter{},
+		ResourcePools:      NewMemoryResourcePoolCoordinator(),
 	}
 }
 
@@ -125,6 +127,9 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 	if s.HeartbeatReporter == nil {
 		s.HeartbeatReporter = &NopHeartbeatReporter{}
 	}
+	if s.ResourcePools == nil {
+		s.ResourcePools = NewMemoryResourcePoolCoordinator()
+	}
 
 	run = PrepareRun(plan, run)
 	resumed := !run.StartedAt.IsZero() && (run.Status == wfruntime.StatusPaused || run.Status == wfruntime.StatusRunning)
@@ -189,15 +194,21 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 }
 
 type nodeAttempt struct {
-	nodeID    string
-	nodePlan  planning.PlanNode
-	nodeRun   *wfruntime.NodeRun
-	task      executor.ExecuteTask
-	executor  executor.Executor
-	emptyEach bool
-	result    executor.ExecuteResult
-	reports   []executor.ExecuteResult
-	err       error
+	nodeID          string
+	nodePlan        planning.PlanNode
+	nodeRun         *wfruntime.NodeRun
+	task            executor.ExecuteTask
+	executor        executor.Executor
+	emptyEach       bool
+	result          executor.ExecuteResult
+	reports         []executor.ExecuteResult
+	err             error
+	releaseResource func()
+}
+
+type readyTask struct {
+	nodeID          string
+	releaseResource func()
 }
 
 func (s *DefaultScheduler) runReadyBatch(
@@ -210,12 +221,25 @@ func (s *DefaultScheduler) runReadyBatch(
 	if limit <= 0 {
 		limit = 1
 	}
-	if len(ready) > limit {
-		ready = ready[:limit]
+	resourceSignal := s.ResourcePools.Changed()
+	selected, resourceBlocked, selectionErr := selectReadyTasks(plan, ready, limit, s.ResourcePools)
+	if selectionErr != nil {
+		s.failScheduling(ctx, run, selectionErr)
+		return true, selectionErr
 	}
-	attempts := make([]*nodeAttempt, 0, len(ready))
-	run.CurrentNodes = append([]string(nil), ready...)
-	for _, nodeID := range ready {
+	if len(selected) == 0 && resourceBlocked {
+		select {
+		case <-ctx.Done():
+		case <-resourceSignal:
+		case <-time.After(100 * time.Millisecond):
+		}
+		return false, nil
+	}
+	attempts := make([]*nodeAttempt, 0, len(selected))
+	run.CurrentNodes = make([]string, 0, len(selected))
+	for _, task := range selected {
+		nodeID := task.nodeID
+		run.CurrentNodes = append(run.CurrentNodes, nodeID)
 		nodePlan := plan.Nodes[nodeID]
 		nodeRun := run.NodeRuns[nodeID]
 		nodeRun.Attempt++
@@ -223,7 +247,7 @@ func (s *DefaultScheduler) runReadyBatch(
 		nodeRun.FinishedAt = time.Time{}
 		nodeRun.Status = wfruntime.StatusRunning
 		nodeRun.Error = ""
-		attempt := &nodeAttempt{nodeID: nodeID, nodePlan: nodePlan, nodeRun: nodeRun}
+		attempt := &nodeAttempt{nodeID: nodeID, nodePlan: nodePlan, nodeRun: nodeRun, releaseResource: task.releaseResource}
 		attempt.task, attempt.emptyEach, attempt.err = buildExecuteTask(run, plan, nodePlan, nodeRun)
 		if attempt.err == nil && !attempt.emptyEach {
 			nodeRun.Input = attempt.task.Input
@@ -275,6 +299,11 @@ func (s *DefaultScheduler) runReadyBatch(
 		}(attempt)
 	}
 	wg.Wait()
+	for _, attempt := range attempts {
+		if attempt.releaseResource != nil {
+			attempt.releaseResource()
+		}
+	}
 
 	if err := ctx.Err(); err != nil {
 		s.cancelRun(context.WithoutCancel(ctx), run, err)
@@ -408,6 +437,59 @@ func (s *DefaultScheduler) runReadyBatch(
 		return true, nil
 	}
 	return false, nil
+}
+
+func selectReadyTasks(
+	plan *planning.ExecutionPlan,
+	ready []string,
+	limit int,
+	pools ResourcePoolCoordinator,
+) ([]readyTask, bool, error) {
+	selected := make([]readyTask, 0, min(limit, len(ready)))
+	groupUsage := make(map[string]int, len(plan.ConcurrencyGroups))
+	resourceBlocked := false
+	for _, nodeID := range ready {
+		if len(selected) >= limit {
+			break
+		}
+		node := plan.Nodes[nodeID]
+		if node.ConcurrencyGroup != "" && groupUsage[node.ConcurrencyGroup] >= plan.ConcurrencyGroups[node.ConcurrencyGroup] {
+			continue
+		}
+		var release func()
+		if node.ResourcePool != "" {
+			capacity := plan.ResourcePools[node.ResourcePool]
+			var acquired bool
+			var err error
+			release, acquired, err = pools.TryAcquire(node.ResourcePool, capacity)
+			if err != nil {
+				for _, task := range selected {
+					if task.releaseResource != nil {
+						task.releaseResource()
+					}
+				}
+				return nil, false, err
+			}
+			if !acquired {
+				resourceBlocked = true
+				continue
+			}
+		}
+		selected = append(selected, readyTask{nodeID: nodeID, releaseResource: release})
+		if node.ConcurrencyGroup != "" {
+			groupUsage[node.ConcurrencyGroup]++
+		}
+	}
+	return selected, resourceBlocked, nil
+}
+
+func (s *DefaultScheduler) failScheduling(ctx context.Context, run *wfruntime.WorkflowRun, err error) {
+	run.Status = wfruntime.StatusFailed
+	run.CurrentNodes = nil
+	run.UpdatedAt = time.Now()
+	run.FinishedAt = run.UpdatedAt
+	s.saveRun(ctx, run)
+	s.emit(ctx, run, wfruntime.EventRunFinished, "", run.Status, err.Error())
 }
 
 func recoverInterruptedTasks(run *wfruntime.WorkflowRun) bool {
