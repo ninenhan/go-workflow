@@ -101,6 +101,11 @@ V0 通过同一个 `runtimehost` 支持 Docker Server、Electron Desktop 和无�
 Headless CLI。三种宿主的严格模式、构建与运行命令见
 [`docs/v0-hosts.md`](docs/v0-hosts.md)。
 
+`workflow-server` 的实现和可执行入口均位于本仓库。Go 应用也可以通过
+`runtimehost.New`、`Host.Start` 和 `Host.Shutdown` 显式启用同进程单节点；
+未启用时不会监听端口或创建运行数据。独立的 `go-workflow-server` 仓库不再承载
+运行时实现。
+
 ## 最小可运行示例
 
 下面这个示例以嵌入式 worker 方式运行，不需要额外进程：

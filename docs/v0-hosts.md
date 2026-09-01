@@ -25,6 +25,7 @@ Common options have equivalent environment variables:
 --addr                WORKFLOW_ADDR
 --data-dir            WORKFLOW_DATA_DIR
 --web-dir             WORKFLOW_WEB_DIR
+--enabled             WORKFLOW_ENABLED
 --embedded-worker     WORKFLOW_EMBEDDED_WORKER
 --automations         WORKFLOW_AUTOMATIONS
 --automation-period   WORKFLOW_AUTOMATION_PERIOD
@@ -43,6 +44,7 @@ The shared configuration schema is:
 ```yaml
 version: 1
 runtime:
+  enabled: true
   listen_host: 127.0.0.1
   port: 55080
   data_directory: ./data
@@ -68,7 +70,11 @@ redis:
 extensions: {}
 ```
 
-`runtime` is consumed by server, desktop, and headless hosts. `desktop` remains
+`runtime` is consumed by server, desktop, and headless hosts. `runtime.enabled`
+is the explicit single-node switch. When false, constructing and starting a
+`runtimehost.Host` opens no store, starts no goroutine, and listens on no port.
+The `workflow-server` executable defaults it to true because launching that
+binary is itself an explicit request to run the host. `desktop` remains
 in the same file but is only acted on by Electron. `desktop.language` is shared
 by the main toolbar and settings window and accepts `zh-CN`, `zh-TW`, `en`,
 `ja`, `es`, or `bo`. Turning off the embedded
@@ -88,6 +94,32 @@ an enabled Redis configuration.
 
 All modes expose `GET /healthz` and `GET /readyz` after the database,
 credential store, scheduler, worker, and automation engine are ready.
+
+## Embedded single-node host
+
+The host implementation lives in this repository. A Go application can opt in
+without maintaining a separate server project:
+
+```go
+host, err := runtimehost.New(runtimehost.Config{
+    Enabled:       true,
+    Mode:          runtimehost.ModeHeadless,
+    Address:       "127.0.0.1:55080",
+    DataDirectory: ".go-workflow-data",
+}, log.Default())
+if err != nil {
+    return err
+}
+defer host.Shutdown(context.Background())
+if err := host.Start(ctx); err != nil {
+    return err
+}
+```
+
+`host.Service()` exposes the same scheduler and embedded Worker used by the Go
+SDK, allowing an application to register custom Units before `Start`. The
+separate `go-workflow-server` repository is not part of the runtime ownership
+model; `cmd/workflow-server` is the canonical executable.
 
 ## Headless CLI
 

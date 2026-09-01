@@ -29,6 +29,7 @@ type FileConfig struct {
 }
 
 type FileRuntimeConfig struct {
+	Enabled          *bool  `yaml:"enabled,omitempty" mapstructure:"enabled"`
 	ListenHost       string `yaml:"listen_host,omitempty" mapstructure:"listen_host"`
 	Port             *int   `yaml:"port,omitempty" mapstructure:"port"`
 	DataDirectory    string `yaml:"data_directory,omitempty" mapstructure:"data_directory"`
@@ -103,7 +104,7 @@ var configFields = map[string]map[string]struct{}{
 		"version": {}, "runtime": {}, "desktop": {}, "storage": {}, "redis": {}, "extensions": {},
 	},
 	"runtime": {
-		"listen_host": {}, "port": {}, "data_directory": {}, "embedded_worker": {}, "automations": {}, "automation_period": {},
+		"enabled": {}, "listen_host": {}, "port": {}, "data_directory": {}, "embedded_worker": {}, "automations": {}, "automation_period": {},
 	},
 	"desktop": {
 		"prevent_sleep": {}, "launch_at_login": {}, "language": {},
@@ -236,6 +237,9 @@ func (fileConfig FileConfig) Apply(config Config) (Config, error) {
 		portText = strconv.Itoa(*fileConfig.Runtime.Port)
 	}
 	config.Address = net.JoinHostPort(host, portText)
+	if fileConfig.Runtime.Enabled != nil {
+		config.Enabled = *fileConfig.Runtime.Enabled
+	}
 	if directory := strings.TrimSpace(fileConfig.Runtime.DataDirectory); directory != "" {
 		config.DataDirectory = directory
 	}

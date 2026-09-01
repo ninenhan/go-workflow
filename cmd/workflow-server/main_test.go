@@ -70,6 +70,7 @@ func TestHostOptionsUseConfigEnvironmentAndCLIOrder(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yml")
 	if err := os.WriteFile(configPath, []byte(`version: 1
 runtime:
+  enabled: false
   listen_host: 127.0.0.2
   port: 58080
   data_directory: file-data
@@ -81,6 +82,7 @@ runtime:
 	}
 	environment := map[string]string{
 		"WORKFLOW_ADDR":              "127.0.0.3:58081",
+		"WORKFLOW_ENABLED":           "true",
 		"WORKFLOW_AUTOMATION_PERIOD": "5s",
 		"WORKFLOW_AUTOMATIONS":       "true",
 	}
@@ -99,6 +101,9 @@ runtime:
 	if config.Address != "127.0.0.4:58082" {
 		t.Fatalf("address = %q", config.Address)
 	}
+	if !config.Enabled {
+		t.Fatal("environment did not override config enabled")
+	}
 	if config.DisableEmbeddedWorker {
 		t.Fatal("CLI did not override config embedded_worker")
 	}
@@ -114,6 +119,13 @@ runtime:
 }
 
 func TestHostOptionsRequireExplicitConfigAndStrictEnvironment(t *testing.T) {
+	defaults, err := parseHostOptions(nil, func(string) string { return "" }, io.Discard)
+	if err != nil {
+		t.Fatalf("parse default options: %v", err)
+	}
+	if !defaults.Enabled {
+		t.Fatal("workflow-server must explicitly enable its canonical host")
+	}
 	if _, err := parseHostOptions(
 		[]string{"--config=" + filepath.Join(t.TempDir(), "missing.yml")},
 		os.Getenv,
@@ -132,6 +144,18 @@ func TestHostOptionsRequireExplicitConfigAndStrictEnvironment(t *testing.T) {
 		io.Discard,
 	); err == nil || !strings.Contains(err.Error(), "WORKFLOW_AUTOMATIONS") {
 		t.Fatalf("invalid environment error = %v", err)
+	}
+	if _, err := parseHostOptions(
+		nil,
+		func(name string) string {
+			if name == "WORKFLOW_ENABLED" {
+				return "sometimes"
+			}
+			return ""
+		},
+		io.Discard,
+	); err == nil || !strings.Contains(err.Error(), "WORKFLOW_ENABLED") {
+		t.Fatalf("invalid enabled environment error = %v", err)
 	}
 }
 

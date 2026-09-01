@@ -66,6 +66,7 @@ func main() {
 
 func parseHostOptions(args []string, getenv func(string) string, output io.Writer) (runtimehost.Config, error) {
 	config := runtimehost.Config{
+		Enabled:          true,
 		Mode:             runtimehost.ModeHeadless,
 		Address:          defaultAddress,
 		DataDirectory:    defaultDataDirectory,
@@ -84,6 +85,7 @@ func parseHostOptions(args []string, getenv func(string) string, output io.Write
 	address := flags.String("addr", defaultAddress, "HTTP listen address")
 	dataDirectory := flags.String("data-dir", defaultDataDirectory, "runtime data directory")
 	webDirectory := flags.String("web-dir", "", "production Web build directory")
+	enabled := flags.Bool("enabled", true, "enable the single-node workflow host")
 	embeddedWorker := flags.Bool("embedded-worker", true, "run the embedded workflow worker")
 	automations := flags.Bool("automations", true, "run scheduled automations")
 	automationPeriod := flags.Duration("automation-period", time.Second, "automation scan period")
@@ -119,6 +121,13 @@ func parseHostOptions(args []string, getenv func(string) string, output io.Write
 	if value := strings.TrimSpace(getenv(workflowWebDirectoryEnvironment)); value != "" {
 		config.WebDirectory = value
 	}
+	if value := strings.TrimSpace(getenv("WORKFLOW_ENABLED")); value != "" {
+		parsed, parseErr := strconv.ParseBool(value)
+		if parseErr != nil {
+			return runtimehost.Config{}, fmt.Errorf("WORKFLOW_ENABLED: %w", parseErr)
+		}
+		config.Enabled = parsed
+	}
 	if value := strings.TrimSpace(getenv("WORKFLOW_EMBEDDED_WORKER")); value != "" {
 		enabled, parseErr := strconv.ParseBool(value)
 		if parseErr != nil {
@@ -152,6 +161,9 @@ func parseHostOptions(args []string, getenv func(string) string, output io.Write
 	}
 	if visited["web-dir"] {
 		config.WebDirectory = strings.TrimSpace(*webDirectory)
+	}
+	if visited["enabled"] {
+		config.Enabled = *enabled
 	}
 	if visited["embedded-worker"] {
 		config.DisableEmbeddedWorker = !*embeddedWorker

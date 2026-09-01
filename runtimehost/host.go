@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -15,9 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ninenhan/go-workflow/core/credential"
-	"github.com/ninenhan/go-workflow/persist/localdb"
-	"github.com/ninenhan/go-workflow/scheduler"
 	"github.com/ninenhan/go-workflow/units"
 )
 
@@ -30,6 +26,7 @@ const (
 )
 
 type Config struct {
+	Enabled               bool
 	Mode                  Mode
 	Address               string
 	DataDirectory         string
@@ -86,123 +83,6 @@ func (config Config) Validate() error {
 		}
 	}
 	return nil
-}
-
-func Run(ctx context.Context, config Config, logger *log.Logger) error {
-	if ctx == nil {
-		return errors.New("workflow host context is nil")
-	}
-	if logger == nil {
-		return errors.New("workflow host logger is nil")
-	}
-	if config.DefaultScope == "" {
-		config.DefaultScope = "local-workspace"
-	}
-	if config.AutomationPeriod <= 0 {
-		config.AutomationPeriod = time.Second
-	}
-	if err := config.Validate(); err != nil {
-		return err
-	}
-	runtimeLock, err := acquireRuntimeDirectoryLock(config.DataDirectory)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := runtimeLock.Close(); err != nil {
-			logger.Printf("close workflow runtime lock: %v", err)
-		}
-	}()
-
-	credentialStore, err := credential.OpenFileStore(filepath.Join(config.DataDirectory, "credentials"))
-	if err != nil {
-		return fmt.Errorf("open encrypted credential store: %w", err)
-	}
-	database, err := localdb.Open(filepath.Join(config.DataDirectory, "workflow.db"))
-	if err != nil {
-		return fmt.Errorf("open workflow database: %w", err)
-	}
-	defer func() {
-		if err := database.Close(); err != nil {
-			logger.Printf("close workflow database: %v", err)
-		}
-	}()
-
-	service, err := scheduler.NewService(scheduler.Options{
-		EnableEmbeddedWorker:   !config.DisableEmbeddedWorker,
-		Store:                  database.Runtime,
-		Definitions:            database.Definitions,
-		Workspace:              database.Workspace,
-		Automations:            database.Automations,
-		Credentials:            credentialStore,
-		DefaultCredentialScope: config.DefaultScope,
-	})
-	if err != nil {
-		return fmt.Errorf("create scheduler service: %w", err)
-	}
-	serviceStopped := false
-	defer func() {
-		if serviceStopped {
-			return
-		}
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := service.Shutdown(shutdownCtx); err != nil {
-			logger.Printf("shutdown workflow scheduler after startup failure: %v", err)
-		}
-	}()
-	if !config.DisableAutomations {
-		if err := service.StartAutomations(context.Background(), config.AutomationPeriod); err != nil {
-			return fmt.Errorf("start workflow automations: %w", err)
-		}
-	}
-
-	hostCtx, requestShutdown := context.WithCancel(ctx)
-	defer requestShutdown()
-	handler, err := NewHTTPHandler(
-		scheduler.NewHTTPHandler(service).Handler(),
-		config.WebDirectory,
-		config.DesktopToken,
-		requestShutdown,
-	)
-	if err != nil {
-		return fmt.Errorf("configure workflow web application: %w", err)
-	}
-	listener, err := net.Listen("tcp", config.Address)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", config.Address, err)
-	}
-	server := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-	}
-
-	serverErrors := make(chan error, 1)
-	go func() {
-		logger.Printf("workflow host %s (%s) listening on http://%s", config.Version, config.Mode, listener.Addr())
-		serverErrors <- server.Serve(listener)
-	}()
-
-	var serveErr error
-	select {
-	case err := <-serverErrors:
-		if !errors.Is(err, http.ErrServerClosed) {
-			serveErr = fmt.Errorf("serve workflow API: %w", err)
-		}
-	case <-hostCtx.Done():
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil && serveErr == nil {
-		serveErr = fmt.Errorf("shutdown workflow API: %w", err)
-	}
-	if err := service.Shutdown(shutdownCtx); err != nil && serveErr == nil {
-		serveErr = fmt.Errorf("shutdown workflow scheduler: %w", err)
-	}
-	serviceStopped = true
-	return serveErr
 }
 
 func NewHTTPHandler(api http.Handler, webDirectory, desktopToken string, requestShutdown context.CancelFunc) (http.Handler, error) {

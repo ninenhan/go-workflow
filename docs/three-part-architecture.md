@@ -26,6 +26,8 @@ The split is now authoritative:
 - `worker.Service` is the data-plane entrypoint
 - `worker/unit` is the standard unit SDK and registry
 - `units` provides built-in units on top of `worker/unit`
+- `runtimehost` composes these packages into an opt-in single-node process; it
+  is a deployment host, not a fourth protocol or runtime model
 
 Recommended deployment modes:
 

@@ -13,6 +13,7 @@ func TestLoadConfigFileAppliesRuntimeSettings(t *testing.T) {
 	path := filepath.Join(directory, "config.yml")
 	source := `version: 1
 runtime:
+  enabled: false
   listen_host: 0.0.0.0
   port: 58090
   data_directory: state
@@ -50,6 +51,9 @@ extensions:
 	}
 	if config.Address != "0.0.0.0:58090" {
 		t.Fatalf("address = %q", config.Address)
+	}
+	if config.Enabled {
+		t.Fatal("runtime enabled switch was not applied")
 	}
 	if config.DataDirectory != filepath.Join(directory, "state") {
 		t.Fatalf("data directory = %q", config.DataDirectory)
