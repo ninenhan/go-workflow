@@ -13,6 +13,7 @@ import (
 	"github.com/ninenhan/go-workflow/internal/gormdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AutomationSchedule struct {
@@ -114,7 +115,9 @@ func (s *GormAutomationStore) ReconcileSchedules(ctx context.Context, desired []
 				return fmt.Errorf("marshal automation schedule: %w", err)
 			}
 			var existing automationScheduleRecord
-			queryErr := tx.Table(s.tableName).First(&existing, "key = ?", schedule.Key).Error
+			queryErr := tx.Table(s.tableName).
+				Where(map[string]any{"key": schedule.Key}).
+				First(&existing).Error
 			switch {
 			case errors.Is(queryErr, gorm.ErrRecordNotFound):
 				if err := tx.Table(s.tableName).Create(&automationScheduleRecord{
@@ -152,7 +155,7 @@ func (s *GormAutomationStore) ReconcileSchedules(ctx context.Context, desired []
 					updates["last_error"] = ""
 				}
 				if err := tx.Table(s.tableName).Model(&automationScheduleRecord{}).
-					Where("key = ?", schedule.Key).
+					Where(map[string]any{"key": schedule.Key}).
 					Updates(updates).Error; err != nil {
 					return err
 				}
@@ -161,7 +164,7 @@ func (s *GormAutomationStore) ReconcileSchedules(ctx context.Context, desired []
 
 		stale := tx.Table(s.tableName).Model(&automationScheduleRecord{}).Where("enabled = ?", true)
 		if len(keys) > 0 {
-			stale = stale.Where("key NOT IN ?", keys)
+			stale = stale.Not(map[string]any{"key": keys})
 		}
 		return stale.Updates(map[string]any{
 			"enabled":     false,
@@ -192,7 +195,8 @@ func (s *GormAutomationStore) ClaimDueSchedules(
 		var records []automationScheduleRecord
 		if err := tx.Table(s.tableName).
 			Where("enabled = ? AND next_run_at <= ? AND (claim_until IS NULL OR claim_until <= ?)", true, now, now).
-			Order("next_run_at asc, key asc").
+			Order(clause.OrderByColumn{Column: clause.Column{Name: "next_run_at"}}).
+			Order(clause.OrderByColumn{Column: clause.Column{Name: "key"}}).
 			Limit(limit).
 			Find(&records).Error; err != nil {
 			return err
@@ -204,8 +208,12 @@ func (s *GormAutomationStore) ClaimDueSchedules(
 			}
 			claimUntil := now.Add(lease).UTC()
 			result := tx.Table(s.tableName).Model(&automationScheduleRecord{}).
-				Where("key = ? AND enabled = ? AND next_run_at = ? AND (claim_until IS NULL OR claim_until <= ?)",
-					record.Key, true, record.NextRunAt, now).
+				Where(map[string]any{
+					"key":         record.Key,
+					"enabled":     true,
+					"next_run_at": record.NextRunAt,
+				}).
+				Where("claim_until IS NULL OR claim_until <= ?", now).
 				Updates(map[string]any{
 					"claim_token": token,
 					"claim_until": claimUntil,
@@ -242,7 +250,7 @@ func (s *GormAutomationStore) CompleteSchedule(
 		return errors.New("completed automation schedule is incomplete")
 	}
 	result := s.db.WithContext(ctx).Table(s.tableName).Model(&automationScheduleRecord{}).
-		Where("key = ? AND claim_token = ?", key, claimToken).
+		Where(map[string]any{"key": key, "claim_token": claimToken}).
 		Updates(map[string]any{
 			"last_run_at": scheduledAt.UTC(),
 			"last_run_id": runID,
@@ -270,7 +278,7 @@ func (s *GormAutomationStore) FailSchedule(
 		return errors.New("failed automation schedule is incomplete")
 	}
 	result := s.db.WithContext(ctx).Table(s.tableName).Model(&automationScheduleRecord{}).
-		Where("key = ? AND claim_token = ?", key, claimToken).
+		Where(map[string]any{"key": key, "claim_token": claimToken}).
 		Updates(map[string]any{
 			"last_error":  message,
 			"next_run_at": retryAt.UTC(),
