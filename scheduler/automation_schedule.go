@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,9 @@ const (
 	AutomationWeekdays AutomationFrequency = "weekdays"
 	AutomationWeekly   AutomationFrequency = "weekly"
 	AutomationInterval AutomationFrequency = "interval"
+
+	minAutomationIntervalMinutes = 1
+	maxAutomationIntervalMinutes = int64((1<<63 - 1) / time.Minute)
 )
 
 type AutomationScheduleConfig struct {
@@ -31,8 +35,79 @@ type AutomationScheduleConfig struct {
 	Timezone        string              `json:"timezone"`
 }
 
-var supportedAutomationIntervals = map[int]struct{}{
-	5: {}, 15: {}, 30: {}, 60: {}, 180: {}, 360: {}, 720: {},
+func validateAutomationInterval(interval int) error {
+	return validateAutomationInterval64(int64(interval))
+}
+
+func validateAutomationInterval64(interval int64) error {
+	if interval < int64(minAutomationIntervalMinutes) {
+		return fmt.Errorf("automation interval must be at least %d minute", minAutomationIntervalMinutes)
+	}
+	if interval > maxAutomationIntervalMinutes {
+		return fmt.Errorf("automation interval exceeds the maximum safe duration of %d minutes", maxAutomationIntervalMinutes)
+	}
+	return nil
+}
+
+func parseAutomationInterval(value any) (int, error) {
+	var interval int64
+	switch number := value.(type) {
+	case int:
+		interval = int64(number)
+	case int8:
+		interval = int64(number)
+	case int16:
+		interval = int64(number)
+	case int32:
+		interval = int64(number)
+	case int64:
+		interval = number
+	case uint:
+		if uint64(number) > uint64(maxAutomationIntervalMinutes) {
+			return 0, fmt.Errorf("automation interval exceeds the maximum safe duration of %d minutes", maxAutomationIntervalMinutes)
+		}
+		interval = int64(number)
+	case uint8:
+		interval = int64(number)
+	case uint16:
+		interval = int64(number)
+	case uint32:
+		interval = int64(number)
+	case uint64:
+		if number > uint64(maxAutomationIntervalMinutes) {
+			return 0, fmt.Errorf("automation interval exceeds the maximum safe duration of %d minutes", maxAutomationIntervalMinutes)
+		}
+		interval = int64(number)
+	case float32:
+		return parseAutomationIntervalFloat(float64(number))
+	case float64:
+		return parseAutomationIntervalFloat(number)
+	case json.Number:
+		parsed, err := strconv.ParseFloat(number.String(), 64)
+		if err != nil {
+			return 0, errors.New("automation interval must be a finite integer number of minutes")
+		}
+		return parseAutomationIntervalFloat(parsed)
+	default:
+		return 0, errors.New("automation interval must be a finite integer number of minutes")
+	}
+	if err := validateAutomationInterval64(interval); err != nil {
+		return 0, err
+	}
+	return int(interval), nil
+}
+
+func parseAutomationIntervalFloat(interval float64) (int, error) {
+	if math.IsNaN(interval) || math.IsInf(interval, 0) || interval != math.Trunc(interval) {
+		return 0, errors.New("automation interval must be a finite integer number of minutes")
+	}
+	if interval < float64(minAutomationIntervalMinutes) {
+		return 0, fmt.Errorf("automation interval must be at least %d minute", minAutomationIntervalMinutes)
+	}
+	if interval > float64(maxAutomationIntervalMinutes) {
+		return 0, fmt.Errorf("automation interval exceeds the maximum safe duration of %d minutes", maxAutomationIntervalMinutes)
+	}
+	return int(interval), nil
 }
 
 func ParseAutomationSchedule(trigger definition.Trigger) (AutomationScheduleConfig, error) {
@@ -68,12 +143,9 @@ func ParseAutomationSchedule(trigger definition.Trigger) (AutomationScheduleConf
 		}
 		config.Weekdays = weekdays
 	case AutomationInterval:
-		interval, err := configInteger(trigger.Config["interval_minutes"])
+		interval, err := parseAutomationInterval(trigger.Config["interval_minutes"])
 		if err != nil {
-			return AutomationScheduleConfig{}, fmt.Errorf("automation trigger %s interval is invalid", trigger.ID)
-		}
-		if _, supported := supportedAutomationIntervals[interval]; !supported {
-			return AutomationScheduleConfig{}, fmt.Errorf("automation trigger %s interval is not supported", trigger.ID)
+			return AutomationScheduleConfig{}, fmt.Errorf("automation trigger %s: %w", trigger.ID, err)
 		}
 		config.IntervalMinutes = interval
 	default:
@@ -88,8 +160,8 @@ func NextAutomationOccurrence(config AutomationScheduleConfig, after time.Time) 
 		return time.Time{}, errors.New("automation timezone is invalid")
 	}
 	if config.Frequency == AutomationInterval {
-		if _, supported := supportedAutomationIntervals[config.IntervalMinutes]; !supported {
-			return time.Time{}, errors.New("automation interval is not supported")
+		if err := validateAutomationInterval(config.IntervalMinutes); err != nil {
+			return time.Time{}, err
 		}
 		return after.Add(time.Duration(config.IntervalMinutes) * time.Minute).UTC(), nil
 	}
