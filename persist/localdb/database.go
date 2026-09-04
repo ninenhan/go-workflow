@@ -25,7 +25,15 @@ type Database struct {
 	db          *gorm.DB
 }
 
+type Options struct {
+	TablePrefix string
+}
+
 func Open(path string) (*Database, error) {
+	return OpenWithOptions(path, Options{})
+}
+
+func OpenWithOptions(path string, opts Options) (*Database, error) {
 	absolutePath, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return nil, fmt.Errorf("resolve runtime database path: %w", err)
@@ -86,22 +94,22 @@ func Open(path string) (*Database, error) {
 		return closeOnError(fmt.Errorf("runtime database integrity check failed: %s", integrity))
 	}
 
-	definitions, err := definition.NewGormRepository(db)
+	definitions, err := definition.NewGormRepositoryWithTablePrefix(db, opts.TablePrefix)
 	if err != nil {
 		return closeOnError(err)
 	}
-	workspace, err := definition.NewGormWorkspaceRepository(db)
+	workspace, err := definition.NewGormWorkspaceRepositoryWithTablePrefix(db, opts.TablePrefix)
 	if err != nil {
 		return closeOnError(err)
 	}
-	runtimeStore, err := wfruntime.NewGormStore(db)
+	runtimeStore, err := wfruntime.NewGormStoreWithTablePrefix(db, opts.TablePrefix)
 	if err != nil {
 		return closeOnError(err)
 	}
 	if _, err := runtimeStore.FailInterruptedRuns(context.Background()); err != nil {
 		return closeOnError(err)
 	}
-	automationStore, err := scheduler.NewGormAutomationStore(db)
+	automationStore, err := scheduler.NewGormAutomationStoreWithTablePrefix(db, opts.TablePrefix)
 	if err != nil {
 		return closeOnError(err)
 	}

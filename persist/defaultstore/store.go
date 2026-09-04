@@ -16,6 +16,7 @@ const DatabaseFilename = "workflow.db"
 
 type Config struct {
 	DataDirectory string
+	TablePrefix   string
 }
 
 func Open(config Config) (*persist.Stores, error) {
@@ -23,7 +24,9 @@ func Open(config Config) (*persist.Stores, error) {
 	if dataDirectory == "" {
 		return nil, errors.New("default store data directory is required")
 	}
-	database, err := localdb.Open(filepath.Join(dataDirectory, DatabaseFilename))
+	database, err := localdb.OpenWithOptions(filepath.Join(dataDirectory, DatabaseFilename), localdb.Options{
+		TablePrefix: config.TablePrefix,
+	})
 	if err != nil {
 		return nil, err
 	}

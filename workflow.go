@@ -45,6 +45,7 @@ type Options struct {
 
 type DefaultOptions struct {
 	DataDirectory string
+	TablePrefix   string
 	Runtime       RuntimeOptions
 }
 
@@ -74,7 +75,10 @@ func OpenDefaultWithOptions(ctx context.Context, opts DefaultOptions) (*Applicat
 	if strings.TrimSpace(opts.DataDirectory) == "" {
 		return nil, errors.New("default data directory is required")
 	}
-	stores, err := defaultstore.Open(defaultstore.Config{DataDirectory: filepath.Clean(opts.DataDirectory)})
+	stores, err := defaultstore.Open(defaultstore.Config{
+		DataDirectory: filepath.Clean(opts.DataDirectory),
+		TablePrefix:   opts.TablePrefix,
+	})
 	if err != nil {
 		return nil, err
 	}

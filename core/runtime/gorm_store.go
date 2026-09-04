@@ -7,13 +7,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ninenhan/go-workflow/internal/gormdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 type GormStore struct {
-	db *gorm.DB
+	db             *gorm.DB
+	runsTable      string
+	snapshotsTable string
+	eventsTable    string
 }
 
 const InterruptedRunMessage = "server restarted before the run completed"
@@ -68,13 +72,35 @@ func (runEventRecord) TableName() string { return "workflow_run_events" }
 // Deprecated: new applications should compose the complete adapter through
 // persist/gormstore.New. This constructor remains available for compatibility.
 func NewGormStore(db *gorm.DB) (*GormStore, error) {
+	return NewGormStoreWithTablePrefix(db, "")
+}
+
+func NewGormStoreWithTablePrefix(db *gorm.DB, tablePrefix string) (*GormStore, error) {
 	if db == nil {
 		return nil, errors.New("gorm db is nil")
 	}
-	if err := db.AutoMigrate(&workflowRunRecord{}, &runSnapshotRecord{}, &runEventRecord{}); err != nil {
-		return nil, fmt.Errorf("auto migrate runtime store: %w", err)
+	if err := gormdb.ValidateTablePrefix(tablePrefix); err != nil {
+		return nil, fmt.Errorf("configure runtime store: %w", err)
 	}
-	return &GormStore{db: db}, nil
+	store := &GormStore{
+		db:             db,
+		runsTable:      gormdb.TableName(tablePrefix, workflowRunRecord{}.TableName()),
+		snapshotsTable: gormdb.TableName(tablePrefix, runSnapshotRecord{}.TableName()),
+		eventsTable:    gormdb.TableName(tablePrefix, runEventRecord{}.TableName()),
+	}
+	for _, migration := range []struct {
+		table string
+		model any
+	}{
+		{table: store.runsTable, model: &workflowRunRecord{}},
+		{table: store.snapshotsTable, model: &runSnapshotRecord{}},
+		{table: store.eventsTable, model: &runEventRecord{}},
+	} {
+		if err := db.Table(migration.table).AutoMigrate(migration.model); err != nil {
+			return nil, fmt.Errorf("auto migrate runtime store: %w", err)
+		}
+	}
+	return store, nil
 }
 
 func (s *GormStore) SaveRun(ctx context.Context, run *WorkflowRun) error {
@@ -88,7 +114,7 @@ func (s *GormStore) SaveRun(ctx context.Context, run *WorkflowRun) error {
 	if err != nil {
 		return err
 	}
-	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
+	return s.db.WithContext(ctx).Table(s.runsTable).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "id"}},
 		UpdateAll: true,
 	}).Create(record).Error
@@ -99,7 +125,7 @@ func (s *GormStore) LoadRun(ctx context.Context, runID string) (*WorkflowRun, er
 		return nil, errors.New("gorm store is not configured")
 	}
 	var record workflowRunRecord
-	if err := s.db.WithContext(ctx).First(&record, "id = ?", runID).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table(s.runsTable).First(&record, "id = ?", runID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrRunNotFound
 		}
@@ -113,7 +139,7 @@ func (s *GormStore) ListRuns(ctx context.Context) ([]*WorkflowRun, error) {
 		return nil, errors.New("gorm store is not configured")
 	}
 	var records []workflowRunRecord
-	if err := s.db.WithContext(ctx).Order("created_at desc").Find(&records).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table(s.runsTable).Order("created_at desc").Find(&records).Error; err != nil {
 		return nil, err
 	}
 	out := make([]*WorkflowRun, 0, len(records))
@@ -138,7 +164,7 @@ func (s *GormStore) SaveSnapshot(ctx context.Context, snapshot *RunSnapshot) err
 	if err != nil {
 		return err
 	}
-	return s.db.WithContext(ctx).Create(record).Error
+	return s.db.WithContext(ctx).Table(s.snapshotsTable).Create(record).Error
 }
 
 func (s *GormStore) Snapshots(ctx context.Context, runID string) ([]*RunSnapshot, error) {
@@ -146,7 +172,7 @@ func (s *GormStore) Snapshots(ctx context.Context, runID string) ([]*RunSnapshot
 		return nil, errors.New("gorm store is not configured")
 	}
 	var records []runSnapshotRecord
-	if err := s.db.WithContext(ctx).Where("run_id = ?", runID).Order("at asc, id asc").Find(&records).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table(s.snapshotsTable).Where("run_id = ?", runID).Order("at asc, id asc").Find(&records).Error; err != nil {
 		return nil, err
 	}
 	out := make([]*RunSnapshot, 0, len(records))
@@ -168,7 +194,7 @@ func (s *GormStore) AppendEvent(ctx context.Context, event RunEvent) error {
 	if err != nil {
 		return err
 	}
-	return s.db.WithContext(ctx).Create(record).Error
+	return s.db.WithContext(ctx).Table(s.eventsTable).Create(record).Error
 }
 
 func (s *GormStore) Events(ctx context.Context, runID string) ([]RunEvent, error) {
@@ -176,7 +202,7 @@ func (s *GormStore) Events(ctx context.Context, runID string) ([]RunEvent, error
 		return nil, errors.New("gorm store is not configured")
 	}
 	var records []runEventRecord
-	if err := s.db.WithContext(ctx).Where("run_id = ?", runID).Order("time asc, id asc").Find(&records).Error; err != nil {
+	if err := s.db.WithContext(ctx).Table(s.eventsTable).Where("run_id = ?", runID).Order("time asc, id asc").Find(&records).Error; err != nil {
 		return nil, err
 	}
 	out := make([]RunEvent, 0, len(records))
@@ -203,7 +229,7 @@ func (s *GormStore) FailInterruptedRuns(ctx context.Context) (int, error) {
 			string(StatusRetry),
 			string(StatusPaused),
 		}
-		if err := tx.Where("status IN ?", activeStatuses).Order("id asc").Find(&records).Error; err != nil {
+		if err := tx.Table(s.runsTable).Where("status IN ?", activeStatuses).Order("id asc").Find(&records).Error; err != nil {
 			return err
 		}
 		now := time.Now().UTC()
@@ -234,7 +260,7 @@ func (s *GormStore) FailInterruptedRuns(ctx context.Context) (int, error) {
 			if err != nil {
 				return err
 			}
-			if err := tx.Clauses(clause.OnConflict{
+			if err := tx.Table(s.runsTable).Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "id"}},
 				UpdateAll: true,
 			}).Create(updated).Error; err != nil {
@@ -251,7 +277,7 @@ func (s *GormStore) FailInterruptedRuns(ctx context.Context) (int, error) {
 			if err != nil {
 				return err
 			}
-			if err := tx.Create(event).Error; err != nil {
+			if err := tx.Table(s.eventsTable).Create(event).Error; err != nil {
 				return err
 			}
 			recovered++

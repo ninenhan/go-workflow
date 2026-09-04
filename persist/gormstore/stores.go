@@ -30,6 +30,9 @@ const (
 type Options struct {
 	Credentials credential.Store
 	Recovery    RecoveryMode
+	// TablePrefix is prepended to every workflow table. Leave empty to retain
+	// the default table names.
+	TablePrefix string
 	// Close transfers connection ownership to the returned bundle when set.
 	// Leave nil when the host application owns the connection pool.
 	Close func() error
@@ -53,19 +56,19 @@ func New(ctx context.Context, db *gorm.DB, opts Options) (*persist.Stores, error
 		return nil, fmt.Errorf("unsupported Gorm recovery mode %q", opts.Recovery)
 	}
 
-	definitions, err := definition.NewGormRepository(db)
+	definitions, err := definition.NewGormRepositoryWithTablePrefix(db, opts.TablePrefix)
 	if err != nil {
 		return nil, err
 	}
-	workspace, err := definition.NewGormWorkspaceRepository(db)
+	workspace, err := definition.NewGormWorkspaceRepositoryWithTablePrefix(db, opts.TablePrefix)
 	if err != nil {
 		return nil, err
 	}
-	runtimeStore, err := wfruntime.NewGormStore(db)
+	runtimeStore, err := wfruntime.NewGormStoreWithTablePrefix(db, opts.TablePrefix)
 	if err != nil {
 		return nil, err
 	}
-	automations, err := scheduler.NewGormAutomationStore(db)
+	automations, err := scheduler.NewGormAutomationStoreWithTablePrefix(db, opts.TablePrefix)
 	if err != nil {
 		return nil, err
 	}

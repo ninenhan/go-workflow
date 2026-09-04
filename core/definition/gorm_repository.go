@@ -8,14 +8,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ninenhan/go-workflow/internal/gormdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 type GormRepository struct {
-	db *gorm.DB
-	mu sync.Mutex
+	db               *gorm.DB
+	workflowsTable   string
+	versionsTable    string
+	mu               sync.Mutex
 }
 
 type workflowRecord struct {
@@ -47,13 +50,33 @@ func (workflowVersionRecord) TableName() string { return "workflow_versions" }
 // Deprecated: new applications should compose the complete adapter through
 // persist/gormstore.New. This constructor remains available for compatibility.
 func NewGormRepository(db *gorm.DB) (*GormRepository, error) {
+	return NewGormRepositoryWithTablePrefix(db, "")
+}
+
+func NewGormRepositoryWithTablePrefix(db *gorm.DB, tablePrefix string) (*GormRepository, error) {
 	if db == nil {
 		return nil, errors.New("gorm db is nil")
 	}
-	if err := db.AutoMigrate(&workflowRecord{}, &workflowVersionRecord{}); err != nil {
-		return nil, fmt.Errorf("auto migrate definition repository: %w", err)
+	if err := gormdb.ValidateTablePrefix(tablePrefix); err != nil {
+		return nil, fmt.Errorf("configure definition repository: %w", err)
 	}
-	return &GormRepository{db: db}, nil
+	repository := &GormRepository{
+		db:             db,
+		workflowsTable: gormdb.TableName(tablePrefix, workflowRecord{}.TableName()),
+		versionsTable:  gormdb.TableName(tablePrefix, workflowVersionRecord{}.TableName()),
+	}
+	for _, migration := range []struct {
+		table string
+		model any
+	}{
+		{table: repository.workflowsTable, model: &workflowRecord{}},
+		{table: repository.versionsTable, model: &workflowVersionRecord{}},
+	} {
+		if err := db.Table(migration.table).AutoMigrate(migration.model); err != nil {
+			return nil, fmt.Errorf("auto migrate definition repository: %w", err)
+		}
+	}
+	return repository, nil
 }
 
 func (r *GormRepository) SaveWorkflow(ctx context.Context, workflow *Workflow) error {
@@ -71,7 +94,7 @@ func (r *GormRepository) SaveWorkflow(ctx context.Context, workflow *Workflow) e
 	defer r.mu.Unlock()
 
 	var existing workflowRecord
-	queryErr := r.db.WithContext(ctx).First(&existing, "id = ?", record.ID).Error
+	queryErr := r.db.WithContext(ctx).Table(r.workflowsTable).First(&existing, "id = ?", record.ID).Error
 	switch {
 	case queryErr == nil:
 		record.CreatedAt = existing.CreatedAt
@@ -82,7 +105,7 @@ func (r *GormRepository) SaveWorkflow(ctx context.Context, workflow *Workflow) e
 	default:
 		return queryErr
 	}
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+	return r.db.WithContext(ctx).Table(r.workflowsTable).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "id"}},
 		UpdateAll: true,
 	}).Create(record).Error
@@ -93,7 +116,7 @@ func (r *GormRepository) GetWorkflow(ctx context.Context, workflowID string) (*W
 		return nil, errors.New("workflow id is required")
 	}
 	var record workflowRecord
-	if err := r.db.WithContext(ctx).First(&record, "id = ?", workflowID).Error; err != nil {
+	if err := r.db.WithContext(ctx).Table(r.workflowsTable).First(&record, "id = ?", workflowID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("workflow not found")
 		}
@@ -104,7 +127,7 @@ func (r *GormRepository) GetWorkflow(ctx context.Context, workflowID string) (*W
 
 func (r *GormRepository) ListWorkflows(ctx context.Context) ([]*Workflow, error) {
 	var records []workflowRecord
-	if err := r.db.WithContext(ctx).Order("id asc").Find(&records).Error; err != nil {
+	if err := r.db.WithContext(ctx).Table(r.workflowsTable).Order("id asc").Find(&records).Error; err != nil {
 		return nil, err
 	}
 	workflows := make([]*Workflow, 0, len(records))
@@ -136,7 +159,7 @@ func (r *GormRepository) CreateVersion(ctx context.Context, workflowID string, d
 	var created *WorkflowVersion
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var maxVersion int
-		if err := tx.Model(&workflowVersionRecord{}).
+		if err := tx.Table(r.versionsTable).Model(&workflowVersionRecord{}).
 			Where("workflow_id = ?", workflowID).
 			Select("COALESCE(MAX(version), 0)").
 			Scan(&maxVersion).Error; err != nil {
@@ -152,10 +175,10 @@ func (r *GormRepository) CreateVersion(ctx context.Context, workflowID string, d
 			Definition: definitionJSON,
 			CreatedAt:  now,
 		}
-		if err := tx.Create(&record).Error; err != nil {
+		if err := tx.Table(r.versionsTable).Create(&record).Error; err != nil {
 			return err
 		}
-		if err := ensureWorkflowRecord(tx, workflowID, definitionCopy, now); err != nil {
+		if err := r.ensureWorkflowRecord(tx, workflowID, definitionCopy, now); err != nil {
 			return err
 		}
 		created = &WorkflowVersion{
@@ -188,7 +211,7 @@ func (r *GormRepository) SaveVersion(ctx context.Context, version *WorkflowVersi
 
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing workflowVersionRecord
-		queryErr := tx.First(&existing, "id = ?", record.ID).Error
+		queryErr := tx.Table(r.versionsTable).First(&existing, "id = ?", record.ID).Error
 		switch {
 		case queryErr == nil:
 			if existing.WorkflowID != record.WorkflowID || existing.Version != record.Version {
@@ -202,13 +225,13 @@ func (r *GormRepository) SaveVersion(ctx context.Context, version *WorkflowVersi
 		default:
 			return queryErr
 		}
-		if err := tx.Clauses(clause.OnConflict{
+		if err := tx.Table(r.versionsTable).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
 			UpdateAll: true,
 		}).Create(record).Error; err != nil {
 			return err
 		}
-		return ensureWorkflowRecord(tx, version.WorkflowID, version.Definition, time.Now().UTC())
+		return r.ensureWorkflowRecord(tx, version.WorkflowID, version.Definition, time.Now().UTC())
 	})
 }
 
@@ -217,7 +240,7 @@ func (r *GormRepository) GetVersion(ctx context.Context, versionID string) (*Wor
 		return nil, errors.New("workflow version id is required")
 	}
 	var record workflowVersionRecord
-	if err := r.db.WithContext(ctx).First(&record, "id = ?", versionID).Error; err != nil {
+	if err := r.db.WithContext(ctx).Table(r.versionsTable).First(&record, "id = ?", versionID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("workflow version not found")
 		}
@@ -231,7 +254,7 @@ func (r *GormRepository) ListVersions(ctx context.Context, workflowID string) ([
 		return nil, errors.New("workflow id is required")
 	}
 	var records []workflowVersionRecord
-	if err := r.db.WithContext(ctx).
+	if err := r.db.WithContext(ctx).Table(r.versionsTable).
 		Where("workflow_id = ?", workflowID).
 		Order("version asc, id asc").
 		Find(&records).Error; err != nil {
@@ -257,7 +280,7 @@ func (r *GormRepository) GetActiveVersion(ctx context.Context, workflowID string
 		return nil, errors.New("workflow has no active version")
 	}
 	var record workflowVersionRecord
-	if err := r.db.WithContext(ctx).First(&record, "id = ?", workflow.ActiveVersion).Error; err != nil {
+	if err := r.db.WithContext(ctx).Table(r.versionsTable).First(&record, "id = ?", workflow.ActiveVersion).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("active workflow version not found")
 		}
@@ -277,30 +300,30 @@ func (r *GormRepository) PublishVersion(ctx context.Context, versionID string) (
 	var published *WorkflowVersion
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var record workflowVersionRecord
-		if err := tx.First(&record, "id = ?", versionID).Error; err != nil {
+		if err := tx.Table(r.versionsTable).First(&record, "id = ?", versionID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return errors.New("workflow version not found")
 			}
 			return err
 		}
 		var workflow workflowRecord
-		if err := tx.First(&workflow, "id = ?", record.WorkflowID).Error; err != nil {
+		if err := tx.Table(r.workflowsTable).First(&workflow, "id = ?", record.WorkflowID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf("workflow not found for version %s", versionID)
 			}
 			return err
 		}
-		if err := tx.Model(&workflowVersionRecord{}).
+		if err := tx.Table(r.versionsTable).Model(&workflowVersionRecord{}).
 			Where("workflow_id = ? AND id <> ? AND status = ?", record.WorkflowID, versionID, VersionPublished).
 			Update("status", VersionArchived).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&workflowVersionRecord{}).
+		if err := tx.Table(r.versionsTable).Model(&workflowVersionRecord{}).
 			Where("id = ?", versionID).
 			Update("status", VersionPublished).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&workflowRecord{}).
+		if err := tx.Table(r.workflowsTable).Model(&workflowRecord{}).
 			Where("id = ?", record.WorkflowID).
 			Updates(map[string]any{
 				"active_version": versionID,
@@ -345,12 +368,12 @@ func validateVersion(version *WorkflowVersion) error {
 	return nil
 }
 
-func ensureWorkflowRecord(tx *gorm.DB, workflowID string, definition *WorkflowDefinition, now time.Time) error {
+func (r *GormRepository) ensureWorkflowRecord(tx *gorm.DB, workflowID string, definition *WorkflowDefinition, now time.Time) error {
 	var workflow workflowRecord
-	err := tx.First(&workflow, "id = ?", workflowID).Error
+	err := tx.Table(r.workflowsTable).First(&workflow, "id = ?", workflowID).Error
 	switch {
 	case err == nil:
-		return tx.Model(&workflowRecord{}).
+		return tx.Table(r.workflowsTable).Model(&workflowRecord{}).
 			Where("id = ?", workflowID).
 			Update("updated_at", now).Error
 	case !errors.Is(err, gorm.ErrRecordNotFound):
@@ -364,7 +387,7 @@ func ensureWorkflowRecord(tx *gorm.DB, workflowID string, definition *WorkflowDe
 	if err != nil {
 		return err
 	}
-	return tx.Create(&workflowRecord{
+	return tx.Table(r.workflowsTable).Create(&workflowRecord{
 		ID:          workflowID,
 		Name:        definition.Name,
 		Description: definition.Description,

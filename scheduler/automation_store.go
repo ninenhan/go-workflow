@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ninenhan/go-workflow/internal/gormdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -40,7 +41,8 @@ type AutomationStore interface {
 }
 
 type GormAutomationStore struct {
-	db *gorm.DB
+	db        *gorm.DB
+	tableName string
 }
 
 type automationScheduleRecord struct {
@@ -69,13 +71,21 @@ func (automationScheduleRecord) TableName() string { return "workflow_automation
 // Deprecated: new applications should compose the complete adapter through
 // persist/gormstore.New. This constructor remains available for compatibility.
 func NewGormAutomationStore(db *gorm.DB) (*GormAutomationStore, error) {
+	return NewGormAutomationStoreWithTablePrefix(db, "")
+}
+
+func NewGormAutomationStoreWithTablePrefix(db *gorm.DB, tablePrefix string) (*GormAutomationStore, error) {
 	if db == nil {
 		return nil, errors.New("gorm db is nil")
 	}
-	if err := db.AutoMigrate(&automationScheduleRecord{}); err != nil {
+	if err := gormdb.ValidateTablePrefix(tablePrefix); err != nil {
+		return nil, fmt.Errorf("configure automation store: %w", err)
+	}
+	tableName := gormdb.TableName(tablePrefix, automationScheduleRecord{}.TableName())
+	if err := db.Table(tableName).AutoMigrate(&automationScheduleRecord{}); err != nil {
 		return nil, fmt.Errorf("auto migrate automation store: %w", err)
 	}
-	return &GormAutomationStore{db: db}, nil
+	return &GormAutomationStore{db: db, tableName: tableName}, nil
 }
 
 func (s *GormAutomationStore) ReconcileSchedules(ctx context.Context, desired []AutomationSchedule) error {
@@ -104,10 +114,10 @@ func (s *GormAutomationStore) ReconcileSchedules(ctx context.Context, desired []
 				return fmt.Errorf("marshal automation schedule: %w", err)
 			}
 			var existing automationScheduleRecord
-			queryErr := tx.First(&existing, "key = ?", schedule.Key).Error
+			queryErr := tx.Table(s.tableName).First(&existing, "key = ?", schedule.Key).Error
 			switch {
 			case errors.Is(queryErr, gorm.ErrRecordNotFound):
-				if err := tx.Create(&automationScheduleRecord{
+				if err := tx.Table(s.tableName).Create(&automationScheduleRecord{
 					Key:          schedule.Key,
 					WorkflowID:   schedule.WorkflowID,
 					WorkflowName: schedule.WorkflowName,
@@ -141,7 +151,7 @@ func (s *GormAutomationStore) ReconcileSchedules(ctx context.Context, desired []
 					updates["claim_until"] = nil
 					updates["last_error"] = ""
 				}
-				if err := tx.Model(&automationScheduleRecord{}).
+				if err := tx.Table(s.tableName).Model(&automationScheduleRecord{}).
 					Where("key = ?", schedule.Key).
 					Updates(updates).Error; err != nil {
 					return err
@@ -149,7 +159,7 @@ func (s *GormAutomationStore) ReconcileSchedules(ctx context.Context, desired []
 			}
 		}
 
-		stale := tx.Model(&automationScheduleRecord{}).Where("enabled = ?", true)
+		stale := tx.Table(s.tableName).Model(&automationScheduleRecord{}).Where("enabled = ?", true)
 		if len(keys) > 0 {
 			stale = stale.Where("key NOT IN ?", keys)
 		}
@@ -180,7 +190,7 @@ func (s *GormAutomationStore) ClaimDueSchedules(
 	var claimed []AutomationSchedule
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var records []automationScheduleRecord
-		if err := tx.
+		if err := tx.Table(s.tableName).
 			Where("enabled = ? AND next_run_at <= ? AND (claim_until IS NULL OR claim_until <= ?)", true, now, now).
 			Order("next_run_at asc, key asc").
 			Limit(limit).
@@ -193,7 +203,7 @@ func (s *GormAutomationStore) ClaimDueSchedules(
 				return err
 			}
 			claimUntil := now.Add(lease).UTC()
-			result := tx.Model(&automationScheduleRecord{}).
+			result := tx.Table(s.tableName).Model(&automationScheduleRecord{}).
 				Where("key = ? AND enabled = ? AND next_run_at = ? AND (claim_until IS NULL OR claim_until <= ?)",
 					record.Key, true, record.NextRunAt, now).
 				Updates(map[string]any{
@@ -231,7 +241,7 @@ func (s *GormAutomationStore) CompleteSchedule(
 	if key == "" || claimToken == "" || runID == "" || scheduledAt.IsZero() || nextRunAt.IsZero() {
 		return errors.New("completed automation schedule is incomplete")
 	}
-	result := s.db.WithContext(ctx).Model(&automationScheduleRecord{}).
+	result := s.db.WithContext(ctx).Table(s.tableName).Model(&automationScheduleRecord{}).
 		Where("key = ? AND claim_token = ?", key, claimToken).
 		Updates(map[string]any{
 			"last_run_at": scheduledAt.UTC(),
@@ -259,7 +269,7 @@ func (s *GormAutomationStore) FailSchedule(
 	if key == "" || claimToken == "" || strings.TrimSpace(message) == "" || retryAt.IsZero() {
 		return errors.New("failed automation schedule is incomplete")
 	}
-	result := s.db.WithContext(ctx).Model(&automationScheduleRecord{}).
+	result := s.db.WithContext(ctx).Table(s.tableName).Model(&automationScheduleRecord{}).
 		Where("key = ? AND claim_token = ?", key, claimToken).
 		Updates(map[string]any{
 			"last_error":  message,
@@ -282,7 +292,7 @@ func (s *GormAutomationStore) ListSchedules(ctx context.Context) ([]AutomationSc
 		return nil, errors.New("automation store is not configured")
 	}
 	var records []automationScheduleRecord
-	if err := s.db.WithContext(ctx).
+	if err := s.db.WithContext(ctx).Table(s.tableName).
 		Where("enabled = ?", true).
 		Order("workflow_name asc, trigger_id asc").
 		Find(&records).Error; err != nil {
