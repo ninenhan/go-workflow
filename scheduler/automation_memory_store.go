@@ -54,6 +54,7 @@ func (s *MemoryAutomationStore) ReconcileSchedules(_ context.Context, desired []
 		desiredSchedule.Enabled = true
 		existing, exists := s.schedules[desiredSchedule.Key]
 		if exists {
+			desiredSchedule.Input = cloneAutomationInput(existing.Input)
 			desiredSchedule.LastRunAt = existing.LastRunAt
 			desiredSchedule.LastRunID = existing.LastRunID
 			desiredSchedule.LastError = existing.LastError
@@ -162,6 +163,27 @@ func (s *MemoryAutomationStore) FailSchedule(
 	return nil
 }
 
+func (s *MemoryAutomationStore) UpdateScheduleInput(_ context.Context, key string, input map[string]any) error {
+	if s == nil {
+		return errors.New("automation store is not configured")
+	}
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("%w: automation key is required", ErrInvalidAutomationInput)
+	}
+	if err := validateAutomationInput(input); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	schedule, exists := s.schedules[key]
+	if !exists {
+		return ErrAutomationScheduleNotFound
+	}
+	schedule.Input = cloneAutomationInput(input)
+	s.schedules[key] = schedule
+	return nil
+}
+
 func (s *MemoryAutomationStore) ListSchedules(_ context.Context) ([]AutomationSchedule, error) {
 	if s == nil {
 		return nil, errors.New("automation store is not configured")
@@ -193,7 +215,9 @@ func validateAutomationSchedule(schedule AutomationSchedule) error {
 
 func cloneAutomationSchedule(schedule AutomationSchedule) AutomationSchedule {
 	schedule.Config.Weekdays = append([]int(nil), schedule.Config.Weekdays...)
+	schedule.Input = cloneAutomationInput(schedule.Input)
 	return schedule
 }
 
 var _ AutomationStore = (*MemoryAutomationStore)(nil)
+var _ AutomationInputStore = (*MemoryAutomationStore)(nil)

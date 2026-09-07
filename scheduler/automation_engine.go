@@ -174,6 +174,17 @@ func (s *Service) ListAutomations(ctx context.Context) ([]AutomationStatus, erro
 	return statuses, nil
 }
 
+func (s *Service) SetAutomationInput(ctx context.Context, key string, input map[string]any) error {
+	if s == nil || s.automations == nil {
+		return errors.New("automation store is not configured")
+	}
+	store, ok := s.automations.(AutomationInputStore)
+	if !ok {
+		return ErrAutomationInputNotSupported
+	}
+	return store.UpdateScheduleInput(ctx, key, input)
+}
+
 func (s *Service) AutomationError() string {
 	if s == nil {
 		return ""
@@ -201,18 +212,18 @@ func (s *Service) startClaimedAutomation(
 		if !errors.Is(err, wfruntime.ErrRunNotFound) {
 			return err
 		}
+		variables := cloneAutomationInput(schedule.Input)
+		variables["_automation"] = map[string]any{
+			"trigger_id":   schedule.TriggerID,
+			"scheduled_at": schedule.NextRunAt.UTC().Format(time.RFC3339Nano),
+		}
 		run := &wfruntime.WorkflowRun{
 			ID:                runID,
 			WorkflowID:        schedule.WorkflowID,
 			WorkflowVersionID: schedule.VersionID,
 			CredentialScope:   s.credentialScope,
 			Context: wfruntime.RunContext{
-				Variables: map[string]any{
-					"_automation": map[string]any{
-						"trigger_id":   schedule.TriggerID,
-						"scheduled_at": schedule.NextRunAt.UTC().Format(time.RFC3339Nano),
-					},
-				},
+				Variables:   variables,
 				NodeResults: map[string]any{},
 			},
 		}

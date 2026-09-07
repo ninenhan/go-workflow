@@ -57,6 +57,7 @@ func (h *HTTPHandler) Handler() http.Handler {
 	mux.HandleFunc("/v1/credentials", h.handleCredentials)
 	mux.HandleFunc("/v1/credentials/", h.handleCredentialResource)
 	mux.HandleFunc("/v1/automations", h.handleAutomations)
+	mux.HandleFunc("/v1/automations/", h.handleAutomationResource)
 	mux.HandleFunc("/v1/workers", h.handleWorkers)
 	mux.HandleFunc(workerproto.DefaultRegisterPath, h.handleRegister)
 	mux.HandleFunc(workerproto.DefaultHeartbeatPath, h.handleHeartbeat)
@@ -86,6 +87,47 @@ func (h *HTTPHandler) handleAutomations(w http.ResponseWriter, r *http.Request) 
 		payload["scheduler_error"] = schedulerError
 	}
 	writeJSON(w, http.StatusOK, payload)
+}
+
+func (h *HTTPHandler) handleAutomationResource(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.Service == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "scheduler service not configured"})
+		return
+	}
+	resource := strings.TrimPrefix(r.URL.Path, "/v1/automations/")
+	if !strings.HasSuffix(resource, "/input") {
+		http.NotFound(w, r)
+		return
+	}
+	key := strings.TrimSuffix(resource, "/input")
+	if key == "" || strings.Contains(key, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPut {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	var input map[string]any
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err := decoder.Decode(&input); err != nil || input == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "automation input must be a JSON object"})
+		return
+	}
+	if err := h.Service.SetAutomationInput(r.Context(), key, input); err != nil {
+		switch {
+		case errors.Is(err, ErrAutomationScheduleNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+		case errors.Is(err, ErrInvalidAutomationInput):
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		case errors.Is(err, ErrAutomationInputNotSupported):
+			writeJSON(w, http.StatusNotImplemented, map[string]any{"error": err.Error()})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HTTPHandler) handleRuns(w http.ResponseWriter, r *http.Request) {

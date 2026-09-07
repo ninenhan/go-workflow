@@ -24,6 +24,7 @@ type AutomationSchedule struct {
 	TriggerID    string                   `json:"trigger_id"`
 	Fingerprint  string                   `json:"-"`
 	Config       AutomationScheduleConfig `json:"schedule"`
+	Input        map[string]any           `json:"input"`
 	Enabled      bool                     `json:"enabled"`
 	NextRunAt    time.Time                `json:"next_run_at"`
 	LastRunAt    time.Time                `json:"last_run_at,omitempty"`
@@ -41,6 +42,16 @@ type AutomationStore interface {
 	ListSchedules(ctx context.Context) ([]AutomationSchedule, error)
 }
 
+type AutomationInputStore interface {
+	UpdateScheduleInput(ctx context.Context, key string, input map[string]any) error
+}
+
+var (
+	ErrAutomationScheduleNotFound   = errors.New("automation schedule not found")
+	ErrAutomationInputNotSupported  = errors.New("automation input is not supported by the configured store")
+	ErrInvalidAutomationInput       = errors.New("automation input is invalid")
+)
+
 type GormAutomationStore struct {
 	db        *gorm.DB
 	tableName string
@@ -54,6 +65,7 @@ type automationScheduleRecord struct {
 	TriggerID    string         `gorm:"type:varchar(128);not null"`
 	Fingerprint  string         `gorm:"type:varchar(64);not null"`
 	Config       datatypes.JSON `gorm:"type:json;not null"`
+	Input        datatypes.JSON `gorm:"type:json"`
 	Enabled      bool           `gorm:"index;not null"`
 	NextRunAt    time.Time      `gorm:"index;not null"`
 	LastRunAt    *time.Time     `gorm:"index"`
@@ -128,6 +140,7 @@ func (s *GormAutomationStore) ReconcileSchedules(ctx context.Context, desired []
 					TriggerID:    schedule.TriggerID,
 					Fingerprint:  schedule.Fingerprint,
 					Config:       config,
+					Input:        datatypes.JSON([]byte("{}")),
 					Enabled:      true,
 					NextRunAt:    schedule.NextRunAt.UTC(),
 					CreatedAt:    now,
@@ -295,6 +308,32 @@ func (s *GormAutomationStore) FailSchedule(
 	return nil
 }
 
+func (s *GormAutomationStore) UpdateScheduleInput(ctx context.Context, key string, input map[string]any) error {
+	if s == nil || s.db == nil {
+		return errors.New("automation store is not configured")
+	}
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("%w: automation key is required", ErrInvalidAutomationInput)
+	}
+	if err := validateAutomationInput(input); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidAutomationInput, err)
+	}
+	result := s.db.WithContext(ctx).Table(s.tableName).Model(&automationScheduleRecord{}).
+		Where(map[string]any{"key": key}).
+		Update("input", datatypes.JSON(encoded))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrAutomationScheduleNotFound
+	}
+	return nil
+}
+
 func (s *GormAutomationStore) ListSchedules(ctx context.Context) ([]AutomationSchedule, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("automation store is not configured")
@@ -322,6 +361,15 @@ func unmarshalAutomationSchedule(record automationScheduleRecord) (AutomationSch
 	if err := json.Unmarshal(record.Config, &config); err != nil {
 		return AutomationSchedule{}, fmt.Errorf("unmarshal automation schedule: %w", err)
 	}
+	input := make(map[string]any)
+	if len(record.Input) > 0 {
+		if err := json.Unmarshal(record.Input, &input); err != nil {
+			return AutomationSchedule{}, fmt.Errorf("unmarshal automation input: %w", err)
+		}
+		if input == nil {
+			input = make(map[string]any)
+		}
+	}
 	schedule := AutomationSchedule{
 		Key:          record.Key,
 		WorkflowID:   record.WorkflowID,
@@ -330,6 +378,7 @@ func unmarshalAutomationSchedule(record automationScheduleRecord) (AutomationSch
 		TriggerID:    record.TriggerID,
 		Fingerprint:  record.Fingerprint,
 		Config:       config,
+		Input:        input,
 		Enabled:      record.Enabled,
 		NextRunAt:    record.NextRunAt,
 		LastRunID:    record.LastRunID,
@@ -345,6 +394,45 @@ func unmarshalAutomationSchedule(record automationScheduleRecord) (AutomationSch
 	return schedule, nil
 }
 
+func validateAutomationInput(input map[string]any) error {
+	if input == nil {
+		return fmt.Errorf("%w: input must be a JSON object", ErrInvalidAutomationInput)
+	}
+	if _, exists := input["_automation"]; exists {
+		return fmt.Errorf("%w: _automation is reserved", ErrInvalidAutomationInput)
+	}
+	if _, err := json.Marshal(input); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidAutomationInput, err)
+	}
+	return nil
+}
+
+func cloneAutomationInput(input map[string]any) map[string]any {
+	if input == nil {
+		return make(map[string]any)
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = cloneAutomationInputValue(value)
+	}
+	return cloned
+}
+
+func cloneAutomationInputValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneAutomationInput(typed)
+	case []any:
+		cloned := make([]any, len(typed))
+		for index, item := range typed {
+			cloned[index] = cloneAutomationInputValue(item)
+		}
+		return cloned
+	default:
+		return value
+	}
+}
+
 func automationClaimToken() (string, error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
@@ -354,3 +442,4 @@ func automationClaimToken() (string, error) {
 }
 
 var _ AutomationStore = (*GormAutomationStore)(nil)
+var _ AutomationInputStore = (*GormAutomationStore)(nil)
