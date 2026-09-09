@@ -144,6 +144,10 @@ type AsyncExecutor interface {
 	Cancel(ctx context.Context, task ExecuteTask, externalTaskID string) error
 }
 
+type AsyncWaitResourceReleaser interface {
+	ReleaseAsyncWaitResources()
+}
+
 // Dispatcher resolves a task to a concrete executor implementation.
 type Dispatcher interface {
 	Dispatch(task ExecuteTask) (Executor, error)

@@ -14,6 +14,7 @@ func CanTransition(from, to Status) bool {
 			StatusSuccess:   true,
 			StatusFailed:    true,
 			StatusRetry:     true,
+			StatusWaiting:   true,
 			StatusTimeout:   true,
 			StatusPaused:    true,
 			StatusCancelled: true,
@@ -26,6 +27,13 @@ func CanTransition(from, to Status) bool {
 		},
 		StatusPaused: {
 			StatusRunning:   true,
+			StatusCancelled: true,
+		},
+		StatusWaiting: {
+			StatusRunning:   true,
+			StatusFailed:    true,
+			StatusTimeout:   true,
+			StatusPaused:    true,
 			StatusCancelled: true,
 		},
 		StatusFailed: {

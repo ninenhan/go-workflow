@@ -11,6 +11,8 @@ type MemoryStore struct {
 	runs      map[string]*WorkflowRun
 	snapshots map[string][]*RunSnapshot
 	events    map[string][]RunEvent
+	asyncTasks map[string]*AsyncTask
+	asyncRunLeases map[string]memoryAsyncRunLease
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -18,6 +20,8 @@ func NewMemoryStore() *MemoryStore {
 		runs:      make(map[string]*WorkflowRun),
 		snapshots: make(map[string][]*RunSnapshot),
 		events:    make(map[string][]RunEvent),
+		asyncTasks: make(map[string]*AsyncTask),
+		asyncRunLeases: make(map[string]memoryAsyncRunLease),
 	}
 }
 

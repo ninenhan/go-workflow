@@ -133,7 +133,7 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 	}
 
 	run = PrepareRun(plan, run)
-	resumed := !run.StartedAt.IsZero() && (run.Status == wfruntime.StatusPaused || run.Status == wfruntime.StatusRunning)
+	resumed := !run.StartedAt.IsZero() && (run.Status == wfruntime.StatusPaused || run.Status == wfruntime.StatusRunning || run.Status == wfruntime.StatusWaiting)
 	resumed = recoverInterruptedTasks(run) || resumed
 
 	now := time.Now()
@@ -154,7 +154,10 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 			return run, nil
 		}
 		if err := ctx.Err(); err != nil {
-			s.cancelRun(context.WithoutCancel(ctx), run, err)
+			persistCtx := context.WithoutCancel(ctx)
+			if !s.applyRunCommand(persistCtx, run) {
+				s.interruptRun(persistCtx, run)
+			}
 			return run, err
 		}
 
@@ -174,6 +177,13 @@ func (s *DefaultScheduler) Run(ctx context.Context, plan *planning.ExecutionPlan
 				}
 				s.saveRun(ctx, run)
 				s.emit(ctx, run, wfruntime.EventRunFinished, "", run.Status, "")
+				return run, nil
+			}
+			if hasWaitingNodes(run) {
+				run.Status = wfruntime.StatusWaiting
+				run.CurrentNodes = nil
+				run.UpdatedAt = time.Now()
+				s.saveRun(ctx, run)
 				return run, nil
 			}
 
@@ -205,6 +215,7 @@ type nodeAttempt struct {
 	reports         []executor.ExecuteResult
 	err             error
 	releaseResource func()
+	persistedWait   bool
 }
 
 type readyTask struct {
@@ -286,11 +297,31 @@ func (s *DefaultScheduler) runReadyBatch(
 				attempt.reports = append(attempt.reports, result)
 				status := result.NormalizedStatus()
 				if status == executor.StatusAccepted || status == executor.StatusRunning {
-					result, err = s.waitAsyncResult(execCtx, attempt.executor, attempt.task, result)
-					attempt.result = result
-					attempt.err = err
-					if err == nil {
-						attempt.reports = append(attempt.reports, result)
+					if store, ok := s.Store.(wfruntime.AsyncTaskStore); ok {
+						externalTaskID := result.ExternalTaskID
+						if externalTaskID == "" {
+							externalTaskID, _ = result.Metadata["external_task_id"].(string)
+						}
+						if externalTaskID == "" {
+							attempt.err = errors.New("async result missing external_task_id")
+						} else {
+							result.ExternalTaskID = externalTaskID
+							attempt.result = result
+							attempt.err = store.SaveAsyncTask(execCtx, &wfruntime.AsyncTask{DispatchID: attempt.task.DispatchID, RunID: attempt.task.RunID, NodeID: attempt.task.NodeID, ExternalTaskID: externalTaskID, Task: attempt.task})
+							attempt.persistedWait = attempt.err == nil
+							if attempt.persistedWait {
+								if releaser, ok := attempt.executor.(executor.AsyncWaitResourceReleaser); ok {
+									releaser.ReleaseAsyncWaitResources()
+								}
+							}
+						}
+					} else {
+						result, err = s.waitAsyncResult(execCtx, attempt.executor, attempt.task, result)
+						attempt.result = result
+						attempt.err = err
+						if err == nil {
+							attempt.reports = append(attempt.reports, result)
+						}
 					}
 				}
 			}
@@ -308,9 +339,16 @@ func (s *DefaultScheduler) runReadyBatch(
 	}
 
 	if err := ctx.Err(); err != nil {
-		s.cancelRun(context.WithoutCancel(ctx), run, err)
+		persistCtx := context.WithoutCancel(ctx)
+		if !s.applyRunCommand(persistCtx, run) {
+			s.interruptRun(persistCtx, run)
+		}
 		return true, err
 	}
+	return s.applyAttempts(ctx, plan, run, attempts)
+}
+
+func (s *DefaultScheduler) applyAttempts(ctx context.Context, plan *planning.ExecutionPlan, run *wfruntime.WorkflowRun, attempts []*nodeAttempt) (bool, error) {
 	failedFast := false
 	for _, attempt := range attempts {
 		nodeID := attempt.nodeID
@@ -363,6 +401,20 @@ func (s *DefaultScheduler) runReadyBatch(
 
 		result := attempt.result
 		switch result.NormalizedStatus() {
+		case executor.StatusAccepted, executor.StatusRunning:
+			if !attempt.persistedWait {
+				s.handleNodeError(ctx, run, nodePlan, nodeRun, errors.New("async result was not persisted"))
+				break
+			}
+			nodeRun.Status = wfruntime.StatusWaiting
+			nodeRun.Error = ""
+			nodeRun.FinishedAt = time.Time{}
+			nodeRun.Metadata = mergeMap(nodeRun.Metadata, result.Metadata)
+			nodeRun.Metadata["external_task_id"] = result.ExternalTaskID
+			run.Status = wfruntime.StatusWaiting
+			run.UpdatedAt = time.Now()
+			s.saveRun(ctx, run)
+			s.emit(ctx, run, wfruntime.EventNodeWaiting, nodeID, nodeRun.Status, "async result pending")
 		case executor.StatusSucceeded:
 			eachOutputs, appendErr := appendEachLoopOutput(nodePlan, nodeRun, result.Output)
 			if appendErr != nil {
@@ -439,6 +491,27 @@ func (s *DefaultScheduler) runReadyBatch(
 		return true, nil
 	}
 	return false, nil
+}
+
+func (s *DefaultScheduler) ApplyAsyncResult(ctx context.Context, plan *planning.ExecutionPlan, run *wfruntime.WorkflowRun, task *wfruntime.AsyncTask) error {
+	if plan == nil || run == nil || task == nil || task.Result == nil {
+		return errors.New("async continuation is incomplete")
+	}
+	if wfruntime.IsTerminal(run.Status) {
+		return ErrRunCancelled
+	}
+	nodeRun := run.NodeRuns[task.NodeID]
+	if nodeRun == nil || nodeRun.Status != wfruntime.StatusWaiting || nodeRun.DispatchID != task.DispatchID {
+		return errors.New("async continuation no longer matches the waiting node")
+	}
+	nodeRun.Status = wfruntime.StatusRunning
+	run.Status = wfruntime.StatusRunning
+	run.CurrentNodes = []string{task.NodeID}
+	run.UpdatedAt = time.Now()
+	s.saveRun(ctx, run)
+	attempt := &nodeAttempt{nodeID: task.NodeID, nodePlan: plan.Nodes[task.NodeID], nodeRun: nodeRun, task: task.Task, result: *task.Result, reports: []executor.ExecuteResult{*task.Result}}
+	_, err := s.applyAttempts(ctx, plan, run, []*nodeAttempt{attempt})
+	return err
 }
 
 func selectReadyTasks(
@@ -1825,6 +1898,25 @@ func (s *DefaultScheduler) cancelRun(ctx context.Context, run *wfruntime.Workflo
 	s.emit(ctx, run, wfruntime.EventRunFinished, "", run.Status, message)
 }
 
+func (s *DefaultScheduler) interruptRun(ctx context.Context, run *wfruntime.WorkflowRun) {
+	for _, node := range run.NodeRuns {
+		if node != nil && node.Status == wfruntime.StatusRunning {
+			node.Status = wfruntime.StatusPending
+			node.Error = ""
+			node.FinishedAt = time.Time{}
+		}
+	}
+	if hasWaitingNodes(run) {
+		run.Status = wfruntime.StatusWaiting
+	} else {
+		run.Status = wfruntime.StatusRunning
+	}
+	run.CurrentNodes = nil
+	run.UpdatedAt = time.Now()
+	run.FinishedAt = time.Time{}
+	s.saveRun(ctx, run)
+}
+
 func (s *DefaultScheduler) emit(ctx context.Context, run *wfruntime.WorkflowRun, typ wfruntime.EventType, nodeID string, status wfruntime.Status, msg string) {
 	event := wfruntime.RunEvent{
 		RunID:      run.ID,
@@ -1862,9 +1954,21 @@ func (s *DefaultScheduler) applyRunCommand(ctx context.Context, run *wfruntime.W
 		return true
 	case RunCommandCancel:
 		s.RunController.Clear(run.ID)
+		now := time.Now()
+		for _, node := range run.NodeRuns {
+			if node == nil || wfruntime.IsTerminal(node.Status) {
+				continue
+			}
+			node.Status = wfruntime.StatusCancelled
+			node.FinishedAt = now
+		}
 		run.Status = wfruntime.StatusCancelled
-		run.UpdatedAt = time.Now()
+		run.CurrentNodes = nil
+		run.UpdatedAt = now
 		run.FinishedAt = run.UpdatedAt
+		if store, ok := s.Store.(wfruntime.AsyncTaskStore); ok {
+			_ = store.CancelAsyncTasks(ctx, run.ID)
+		}
 		s.saveRun(ctx, run)
 		s.emit(ctx, run, wfruntime.EventRunFinished, "", run.Status, "run cancelled")
 		return true
@@ -1883,6 +1987,15 @@ func allNodesTerminal(run *wfruntime.WorkflowRun) bool {
 		}
 	}
 	return true
+}
+
+func hasWaitingNodes(run *wfruntime.WorkflowRun) bool {
+	for _, node := range run.NodeRuns {
+		if node != nil && node.Status == wfruntime.StatusWaiting {
+			return true
+		}
+	}
+	return false
 }
 
 func hasNodeFailed(run *wfruntime.WorkflowRun) bool {

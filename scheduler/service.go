@@ -64,6 +64,10 @@ type Service struct {
 	automationDone   chan struct{}
 	automationError  string
 	pullBroker       *PullBroker
+	continuationCancel context.CancelFunc
+	continuationDone   chan struct{}
+	continuationWake   chan struct{}
+	continuationWG     sync.WaitGroup
 }
 
 func NewService(opts Options) (*Service, error) {
@@ -140,7 +144,7 @@ func NewService(opts Options) (*Service, error) {
 	}
 
 	engine := runner.NewEngine(opts.Compiler, scheduler)
-	return &Service{
+	service := &Service{
 		engine:          engine,
 		store:           store,
 		definitions:     defs,
@@ -153,7 +157,10 @@ func NewService(opts Options) (*Service, error) {
 		automations:     opts.Automations,
 		automationWake:  make(chan struct{}, 1),
 		pullBroker:      pullBroker,
-	}, nil
+		continuationWake: make(chan struct{}, 1),
+	}
+	service.startContinuationLoop()
+	return service, nil
 }
 
 func (s *Service) PullBroker() *PullBroker {
@@ -320,7 +327,7 @@ func (s *Service) waitForRun(ctx context.Context, runID string) (*wfruntime.Work
 			return nil, err
 		}
 		switch run.Status {
-		case wfruntime.StatusPending, wfruntime.StatusRunning, wfruntime.StatusRetry:
+		case wfruntime.StatusPending, wfruntime.StatusRunning, wfruntime.StatusRetry, wfruntime.StatusWaiting:
 		default:
 			return run, nil
 		}
@@ -340,6 +347,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	automationErr := s.stopAutomations(ctx)
+	continuationErr := s.stopContinuationLoop(ctx)
 	s.runLifecycleMu.Lock()
 	s.shuttingDown = true
 	s.activeRunCancels.Range(func(_, value any) bool {
@@ -359,11 +367,11 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			return false
 		})
 		if !active {
-			return automationErr
+			return errors.Join(automationErr, continuationErr)
 		}
 		select {
 		case <-ctx.Done():
-			return errors.Join(automationErr, fmt.Errorf("shutdown scheduler service: %w", ctx.Err()))
+			return errors.Join(automationErr, continuationErr, fmt.Errorf("shutdown scheduler service: %w", ctx.Err()))
 		case <-ticker.C:
 		}
 	}
@@ -676,6 +684,26 @@ func (s *Service) CancelRun(ctx context.Context, runID string) (*wfruntime.Workf
 		return nil, errors.New("run is already terminal")
 	}
 	s.controller.Set(runID, runner.RunCommandCancel)
+	if store, ok := s.store.(wfruntime.AsyncTaskStore); ok {
+		if err := store.CancelAsyncTasks(ctx, runID); err != nil {
+			return nil, err
+		}
+	}
+	now := time.Now()
+	for _, node := range run.NodeRuns {
+		if node == nil || wfruntime.IsTerminal(node.Status) {
+			continue
+		}
+		node.Status = wfruntime.StatusCancelled
+		node.FinishedAt = now
+	}
+	run.Status = wfruntime.StatusCancelled
+	run.CurrentNodes = nil
+	run.UpdatedAt = now
+	run.FinishedAt = now
+	if err := s.store.SaveRun(ctx, run); err != nil {
+		return nil, err
+	}
 	if cancel, ok := s.activeRunCancels.Load(runID); ok {
 		cancel.(context.CancelFunc)()
 	}

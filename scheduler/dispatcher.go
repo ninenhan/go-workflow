@@ -109,6 +109,10 @@ func (e *RemoteBoundExecutor) Type() executor.Type {
 	return executor.TypeRemote
 }
 
+func (e *RemoteBoundExecutor) ReleaseAsyncWaitResources() {
+	e.releaseOnce()
+}
+
 func (e *RemoteBoundExecutor) Execute(ctx context.Context, task executor.ExecuteTask) (executor.ExecuteResult, error) {
 	if e.worker.Transport == workerproto.TransportPull {
 		if e.pull == nil {

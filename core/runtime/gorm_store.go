@@ -18,6 +18,8 @@ type GormStore struct {
 	runsTable      string
 	snapshotsTable string
 	eventsTable    string
+	asyncTasksTable string
+	asyncLeasesTable string
 }
 
 const InterruptedRunMessage = "server restarted before the run completed"
@@ -87,6 +89,8 @@ func NewGormStoreWithTablePrefix(db *gorm.DB, tablePrefix string) (*GormStore, e
 		runsTable:      gormdb.TableName(tablePrefix, workflowRunRecord{}.TableName()),
 		snapshotsTable: gormdb.TableName(tablePrefix, runSnapshotRecord{}.TableName()),
 		eventsTable:    gormdb.TableName(tablePrefix, runEventRecord{}.TableName()),
+		asyncTasksTable: gormdb.TableName(tablePrefix, asyncTaskRecord{}.TableName()),
+		asyncLeasesTable: gormdb.TableName(tablePrefix, asyncRunLeaseRecord{}.TableName()),
 	}
 	for _, migration := range []struct {
 		table string
@@ -95,6 +99,8 @@ func NewGormStoreWithTablePrefix(db *gorm.DB, tablePrefix string) (*GormStore, e
 		{table: store.runsTable, model: &workflowRunRecord{}},
 		{table: store.snapshotsTable, model: &runSnapshotRecord{}},
 		{table: store.eventsTable, model: &runEventRecord{}},
+		{table: store.asyncTasksTable, model: &asyncTaskRecord{}},
+		{table: store.asyncLeasesTable, model: &asyncRunLeaseRecord{}},
 	} {
 		if err := db.Table(migration.table).AutoMigrate(migration.model); err != nil {
 			return nil, fmt.Errorf("auto migrate runtime store: %w", err)

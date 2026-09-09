@@ -178,6 +178,7 @@ type PullResponse struct {
 type CompleteRequest struct {
 	WorkerID  string                  `json:"worker_id"`
 	CommandID string                  `json:"command_id"`
+	DispatchID string                 `json:"dispatch_id,omitempty"`
 	Result    *executor.ExecuteResult `json:"result,omitempty"`
 	Cancelled bool                    `json:"cancelled,omitempty"`
 	Error     string                  `json:"error,omitempty"`

@@ -1157,6 +1157,22 @@ func (h *HTTPHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 		writeWorkerProtocolError(w, http.StatusNotImplemented, workerproto.ErrorWorkerUnavailable, "pull transport not configured", true)
 		return
 	}
+	if req.DispatchID != "" {
+		if req.Result == nil {
+			writeWorkerProtocolError(w, http.StatusBadRequest, workerproto.ErrorInvalidRequest, "callback completion requires result", false)
+			return
+		}
+		if _, err := h.Service.SubmitAsyncResult(r.Context(), req.DispatchID, *req.Result); err != nil {
+			status := http.StatusConflict
+			if errors.Is(err, wfruntime.ErrAsyncTaskNotFound) {
+				status = http.StatusNotFound
+			}
+			writeWorkerProtocolError(w, status, workerproto.ErrorInvalidRequest, err.Error(), false)
+			return
+		}
+		writeWorkerJSON(w, http.StatusOK, workerproto.CompleteResponse{Accepted: true})
+		return
+	}
 	if err := h.Service.PullBroker().Complete(req); err != nil {
 		writeWorkerProtocolError(w, http.StatusNotFound, workerproto.ErrorInvalidRequest, err.Error(), false)
 		return
