@@ -297,24 +297,9 @@ func (s *DefaultScheduler) runReadyBatch(
 				attempt.reports = append(attempt.reports, result)
 				status := result.NormalizedStatus()
 				if status == executor.StatusAccepted || status == executor.StatusRunning {
-					if store, ok := s.Store.(wfruntime.AsyncTaskStore); ok {
-						externalTaskID := result.ExternalTaskID
-						if externalTaskID == "" {
-							externalTaskID, _ = result.Metadata["external_task_id"].(string)
-						}
-						if externalTaskID == "" {
-							attempt.err = errors.New("async result missing external_task_id")
-						} else {
-							result.ExternalTaskID = externalTaskID
-							attempt.result = result
-							attempt.err = store.SaveAsyncTask(execCtx, &wfruntime.AsyncTask{DispatchID: attempt.task.DispatchID, RunID: attempt.task.RunID, NodeID: attempt.task.NodeID, ExternalTaskID: externalTaskID, Task: attempt.task})
-							attempt.persistedWait = attempt.err == nil
-							if attempt.persistedWait {
-								if releaser, ok := attempt.executor.(executor.AsyncWaitResourceReleaser); ok {
-									releaser.ReleaseAsyncWaitResources()
-								}
-							}
-						}
+					_, pollable := attempt.executor.(executor.AsyncExecutor)
+					if result.AwaitCallback || !pollable {
+						attempt.err = s.persistAsyncAttempt(execCtx, attempt, result)
 					} else {
 						result, err = s.waitAsyncResult(execCtx, attempt.executor, attempt.task, result)
 						attempt.result = result
@@ -346,6 +331,40 @@ func (s *DefaultScheduler) runReadyBatch(
 		return true, err
 	}
 	return s.applyAttempts(ctx, plan, run, attempts)
+}
+
+func (s *DefaultScheduler) persistAsyncAttempt(ctx context.Context, attempt *nodeAttempt, result executor.ExecuteResult) error {
+	store, ok := s.Store.(wfruntime.AsyncTaskStore)
+	if !ok {
+		return errors.New("callback execution requires an async task store")
+	}
+	if _, ok := s.Store.(wfruntime.AsyncResultStore); !ok {
+		return errors.New("callback execution requires atomic async result commits")
+	}
+	externalTaskID := result.ExternalTaskID
+	if externalTaskID == "" {
+		externalTaskID, _ = result.Metadata["external_task_id"].(string)
+	}
+	if externalTaskID == "" {
+		return errors.New("async result missing external_task_id")
+	}
+	expireAt, err := result.CallbackExpireAt(time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	result.ExternalTaskID = externalTaskID
+	attempt.result = result
+	if err := store.SaveAsyncTask(ctx, &wfruntime.AsyncTask{
+		DispatchID: attempt.task.DispatchID, RunID: attempt.task.RunID,
+		NodeID: attempt.task.NodeID, ExternalTaskID: externalTaskID, Task: attempt.task, ExpireAt: expireAt,
+	}); err != nil {
+		return err
+	}
+	attempt.persistedWait = true
+	if releaser, ok := attempt.executor.(executor.AsyncWaitResourceReleaser); ok {
+		releaser.ReleaseAsyncWaitResources()
+	}
+	return nil
 }
 
 func (s *DefaultScheduler) applyAttempts(ctx context.Context, plan *planning.ExecutionPlan, run *wfruntime.WorkflowRun, attempts []*nodeAttempt) (bool, error) {
@@ -500,18 +519,75 @@ func (s *DefaultScheduler) ApplyAsyncResult(ctx context.Context, plan *planning.
 	if wfruntime.IsTerminal(run.Status) {
 		return ErrRunCancelled
 	}
-	nodeRun := run.NodeRuns[task.NodeID]
-	if nodeRun == nil || nodeRun.Status != wfruntime.StatusWaiting || nodeRun.DispatchID != task.DispatchID {
-		return errors.New("async continuation no longer matches the waiting node")
+	if run.Status == wfruntime.StatusPaused {
+		return ErrRunPaused
 	}
+	store, ok := s.Store.(wfruntime.AsyncResultStore)
+	if !ok {
+		return errors.New("runtime store does not support atomic async result commits")
+	}
+	if task.ResultApplied {
+		return nil
+	}
+	switch task.Result.NormalizedStatus() {
+	case executor.StatusSucceeded, executor.StatusFailed, executor.StatusRetryable:
+	default:
+		return errors.New("async callback result must be terminal")
+	}
+	if _, ok := plan.Nodes[task.NodeID]; !ok {
+		return errors.New("async node is missing from the execution plan")
+	}
+	working := run.Clone()
+	nodeRun := working.NodeRuns[task.NodeID]
+	if task.RunID != run.ID || nodeRun == nil || nodeRun.DispatchID != task.DispatchID ||
+		(nodeRun.Status != wfruntime.StatusWaiting && nodeRun.Status != wfruntime.StatusRunning) {
+		return errors.New("async continuation no longer matches the waiting or interrupted node")
+	}
+	// Reuse loop/retry handling without persisting intermediate running states
+	// or publishing effects before the final checkpoint is committed.
+	buffer := wfruntime.NewMemoryStore()
+	applying := *s
+	applying.Store = buffer
+	applying.Sink = nil
+	applying.ResultReporter = &NopResultReporter{}
 	nodeRun.Status = wfruntime.StatusRunning
-	run.Status = wfruntime.StatusRunning
-	run.CurrentNodes = []string{task.NodeID}
-	run.UpdatedAt = time.Now()
-	s.saveRun(ctx, run)
+	working.Status = wfruntime.StatusRunning
+	working.UpdatedAt = time.Now()
 	attempt := &nodeAttempt{nodeID: task.NodeID, nodePlan: plan.Nodes[task.NodeID], nodeRun: nodeRun, task: task.Task, result: *task.Result, reports: []executor.ExecuteResult{*task.Result}}
-	_, err := s.applyAttempts(ctx, plan, run, []*nodeAttempt{attempt})
-	return err
+	if _, err := applying.applyAttempts(ctx, plan, working, []*nodeAttempt{attempt}); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	snapshots, err := buffer.Snapshots(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	events, err := buffer.Events(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	if err := store.CommitAsyncResult(ctx, task, working, run.UpdatedAt, snapshots, events); err != nil {
+		return err
+	}
+	task.ResultApplied = true
+	run.Status = working.Status
+	run.CurrentNodes = working.CurrentNodes
+	run.NodeRuns = working.NodeRuns
+	run.Context = working.Context
+	run.UpdatedAt = working.UpdatedAt
+	run.FinishedAt = working.FinishedAt
+	// External observers are best effort; durable events are already committed.
+	if s.ResultReporter != nil {
+		_ = s.ResultReporter.ReportResult(ctx, task.Task, *task.Result)
+	}
+	if s.Sink != nil {
+		for _, event := range events {
+			s.Sink.Emit(ctx, event)
+		}
+	}
+	return nil
 }
 
 func selectReadyTasks(

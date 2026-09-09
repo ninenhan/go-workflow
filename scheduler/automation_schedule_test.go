@@ -122,9 +122,9 @@ func TestParseAutomationScheduleRejectsFreeformAndInvalidValues(t *testing.T) {
 			ID: "timezone", Type: definition.TriggerCron, Enabled: true,
 			Config: map[string]any{"frequency": "daily", "time": "09:00", "timezone": "Nowhere/Invalid"},
 		},
-		"unsupported interval": {
+		"nonpositive interval": {
 			ID: "interval", Type: definition.TriggerCron, Enabled: true,
-			Config: map[string]any{"frequency": "interval", "interval_minutes": 1, "timezone": "UTC"},
+			Config: map[string]any{"frequency": "interval", "interval_minutes": 0, "timezone": "UTC"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -132,6 +132,18 @@ func TestParseAutomationScheduleRejectsFreeformAndInvalidValues(t *testing.T) {
 				t.Fatal("expected invalid schedule to fail")
 			}
 		})
+	}
+}
+
+func TestAutomationScheduleAcceptsNonWhitelistIntervals(t *testing.T) {
+	for _, minutes := range []int{1, 10, 20, 45, 2900, 3600} {
+		_, err := ParseAutomationSchedule(definition.Trigger{
+			ID: "interval", Type: definition.TriggerCron, Enabled: true,
+			Config: map[string]any{"frequency": "interval", "interval_minutes": minutes, "timezone": "UTC"},
+		})
+		if err != nil {
+			t.Errorf("interval %d minutes: %v", minutes, err)
+		}
 	}
 }
 

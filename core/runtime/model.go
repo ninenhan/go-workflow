@@ -121,28 +121,42 @@ const (
 )
 
 type AsyncTask struct {
-	DispatchID     string                 `json:"dispatch_id"`
-	RunID          string                 `json:"run_id"`
-	NodeID         string                 `json:"node_id"`
-	ExternalTaskID string                 `json:"external_task_id"`
-	Task           executor.ExecuteTask   `json:"task"`
+	DispatchID     string                  `json:"dispatch_id"`
+	RunID          string                  `json:"run_id"`
+	NodeID         string                  `json:"node_id"`
+	ExternalTaskID string                  `json:"external_task_id"`
+	Task           executor.ExecuteTask    `json:"task"`
 	Result         *executor.ExecuteResult `json:"result,omitempty"`
-	ResultHash     string                 `json:"-"`
-	State          AsyncTaskState         `json:"state"`
-	ClaimToken     string                 `json:"-"`
-	ClaimUntil     time.Time              `json:"-"`
-	CreatedAt      time.Time              `json:"created_at"`
-	UpdatedAt      time.Time              `json:"updated_at"`
+	ResultHash     string                  `json:"-"`
+	ResultApplied  bool                    `json:"-"`
+	// ExpireAt is the persisted callback deadline; zero means no expiration.
+	ExpireAt   time.Time      `json:"expire_at,omitempty,omitzero"`
+	State      AsyncTaskState `json:"state"`
+	ClaimToken string         `json:"-"`
+	ClaimUntil time.Time      `json:"-"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
 }
 
 type AsyncTaskStore interface {
 	SaveAsyncTask(ctx context.Context, task *AsyncTask) error
 	SubmitAsyncResult(ctx context.Context, dispatchID string, result executor.ExecuteResult) (bool, error)
+	// ClaimCompletedAsyncTasks also atomically completes expired waiting tasks
+	// with a non-retryable timeout result before claiming recovery work.
 	ClaimCompletedAsyncTasks(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]*AsyncTask, error)
 	RenewAsyncTask(ctx context.Context, dispatchID, claimToken string, claimUntil time.Time) (bool, error)
 	AcknowledgeAsyncTask(ctx context.Context, dispatchID, claimToken string) error
 	ReleaseAsyncTask(ctx context.Context, dispatchID, claimToken string) error
 	CancelAsyncTasks(ctx context.Context, runID string) error
+}
+
+// AsyncResultStore atomically commits callback effects and their application
+// marker under a live task/run claim. Implementations must reject stale claims,
+// changed runs and cancelled tasks, without persisting any partial effects.
+// The marker survives claim release so retries and loops cannot apply a callback
+// twice even when its node is pending again or has a newer dispatch ID.
+type AsyncResultStore interface {
+	CommitAsyncResult(ctx context.Context, task *AsyncTask, run *WorkflowRun, expectedUpdatedAt time.Time, snapshots []*RunSnapshot, events []RunEvent) error
 }
 
 func NewWorkflowRun(runID, workflowID, versionID, planID string) *WorkflowRun {

@@ -45,25 +45,25 @@ type Options struct {
 // Service is the orchestration entrypoint. It owns compilation, scheduling,
 // runtime state, and optionally an embedded worker for single-binary deployments.
 type Service struct {
-	engine           *runner.Engine
-	store            wfruntime.Store
-	definitions      definition.Repository
-	workspace        definition.WorkspaceRepository
-	controller       runner.RunController
-	workers          WorkerRegistry
-	embeddedWorker   *worker.Service
-	credentials      credential.Store
-	credentialScope  string
-	automations      AutomationStore
-	activeRunCancels sync.Map
-	runLifecycleMu   sync.Mutex
-	shuttingDown     bool
-	automationMu     sync.RWMutex
-	automationCancel context.CancelFunc
-	automationWake   chan struct{}
-	automationDone   chan struct{}
-	automationError  string
-	pullBroker       *PullBroker
+	engine             *runner.Engine
+	store              wfruntime.Store
+	definitions        definition.Repository
+	workspace          definition.WorkspaceRepository
+	controller         runner.RunController
+	workers            WorkerRegistry
+	embeddedWorker     *worker.Service
+	credentials        credential.Store
+	credentialScope    string
+	automations        AutomationStore
+	activeRunCancels   sync.Map
+	runLifecycleMu     sync.Mutex
+	shuttingDown       bool
+	automationMu       sync.RWMutex
+	automationCancel   context.CancelFunc
+	automationWake     chan struct{}
+	automationDone     chan struct{}
+	automationError    string
+	pullBroker         *PullBroker
 	continuationCancel context.CancelFunc
 	continuationDone   chan struct{}
 	continuationWake   chan struct{}
@@ -145,18 +145,18 @@ func NewService(opts Options) (*Service, error) {
 
 	engine := runner.NewEngine(opts.Compiler, scheduler)
 	service := &Service{
-		engine:          engine,
-		store:           store,
-		definitions:     defs,
-		workspace:       workspace,
-		controller:      controller,
-		workers:         workers,
-		embeddedWorker:  embeddedWorker,
-		credentials:     opts.Credentials,
-		credentialScope: credentialScope,
-		automations:     opts.Automations,
-		automationWake:  make(chan struct{}, 1),
-		pullBroker:      pullBroker,
+		engine:           engine,
+		store:            store,
+		definitions:      defs,
+		workspace:        workspace,
+		controller:       controller,
+		workers:          workers,
+		embeddedWorker:   embeddedWorker,
+		credentials:      opts.Credentials,
+		credentialScope:  credentialScope,
+		automations:      opts.Automations,
+		automationWake:   make(chan struct{}, 1),
+		pullBroker:       pullBroker,
 		continuationWake: make(chan struct{}, 1),
 	}
 	service.startContinuationLoop()
@@ -669,6 +669,15 @@ func (s *Service) PauseRun(ctx context.Context, runID string) (*wfruntime.Workfl
 		return nil, errors.New("run is already terminal")
 	}
 	s.controller.Set(runID, runner.RunCommandPause)
+	// A suspended callback run has no execution thread to consume this command.
+	// Keep its waiting nodes intact so resuming does not submit them again.
+	if run.Status == wfruntime.StatusWaiting {
+		run.Status = wfruntime.StatusPaused
+		run.UpdatedAt = time.Now()
+		if err := s.store.SaveRun(ctx, run); err != nil {
+			return nil, err
+		}
+	}
 	return run, nil
 }
 

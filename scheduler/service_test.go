@@ -109,7 +109,7 @@ func TestServiceRunDefinition(t *testing.T) {
 	}
 }
 
-func TestServiceShutdownCancelsBackgroundRuns(t *testing.T) {
+func TestServiceShutdownPreservesBackgroundRuns(t *testing.T) {
 	store := wfruntime.NewMemoryStore()
 	svc, err := NewService(Options{
 		EnableEmbeddedWorker: true,
@@ -151,10 +151,13 @@ func TestServiceShutdownCancelsBackgroundRuns(t *testing.T) {
 	}
 	run, err := store.LoadRun(context.Background(), accepted.ID)
 	if err != nil {
-		t.Fatalf("load cancelled run: %v", err)
+		t.Fatalf("load interrupted run: %v", err)
 	}
-	if run.Status != wfruntime.StatusCancelled || len(run.CurrentNodes) != 0 {
+	if run.Status != wfruntime.StatusRunning || len(run.CurrentNodes) != 0 || !run.FinishedAt.IsZero() {
 		t.Fatalf("shutdown run = %#v", run)
+	}
+	if node := run.NodeRuns["wait"]; node == nil || node.Status != wfruntime.StatusPending {
+		t.Fatalf("shutdown node must remain resumable: %#v", node)
 	}
 	if _, err := svc.StartDefinition(context.Background(), &definition.WorkflowDefinition{
 		ID:         "after-shutdown",

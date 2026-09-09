@@ -1167,6 +1167,9 @@ func (h *HTTPHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, wfruntime.ErrAsyncTaskNotFound) {
 				status = http.StatusNotFound
 			}
+			if errors.Is(err, wfruntime.ErrAsyncTaskExpired) {
+				status = http.StatusGone
+			}
 			writeWorkerProtocolError(w, status, workerproto.ErrorInvalidRequest, err.Error(), false)
 			return
 		}

@@ -7,15 +7,38 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ninenhan/go-workflow/core/executor"
 )
 
 var (
-	ErrAsyncTaskNotFound = errors.New("async task not found")
-	ErrAsyncTaskCancelled = errors.New("async task is cancelled")
+	ErrAsyncTaskNotFound   = errors.New("async task not found")
+	ErrAsyncTaskCancelled  = errors.New("async task is cancelled")
 	ErrAsyncResultConflict = errors.New("async task already has a different result")
+	ErrAsyncClaimLost      = errors.New("async task claim is no longer valid")
+	ErrAsyncRunChanged     = errors.New("async task run has changed")
+	ErrAsyncTaskExpired    = errors.New("async callback timeout")
 )
+
+func validateAsyncCommitRun(run *WorkflowRun, task *AsyncTask, expectedUpdatedAt time.Time) error {
+	if run == nil {
+		return ErrRunNotFound
+	}
+	if run.Status == StatusCancelled {
+		return ErrAsyncTaskCancelled
+	}
+	if run.ID != task.RunID || !run.UpdatedAt.Equal(expectedUpdatedAt) ||
+		(run.Status != StatusWaiting && run.Status != StatusRunning) {
+		return ErrAsyncRunChanged
+	}
+	node := run.NodeRuns[task.NodeID]
+	if node == nil || node.DispatchID != task.DispatchID ||
+		(node.Status != StatusWaiting && node.Status != StatusRunning) {
+		return ErrAsyncRunChanged
+	}
+	return nil
+}
 
 func validateAsyncResult(result executor.ExecuteResult) error {
 	switch result.NormalizedStatus() {

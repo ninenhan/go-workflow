@@ -7,6 +7,9 @@ import (
 	"reflect"
 	"sort"
 	"sync"
+	"time"
+
+	"github.com/ninenhan/go-workflow/core/executor"
 )
 
 var ErrAlreadyRegistered = errors.New("unit already registered")
@@ -59,6 +62,14 @@ func (e *ControlSignalError) Error() string {
 }
 
 type ExecutionResult struct {
+	// An omitted status preserves synchronous success for existing units.
+	// Accepted and running require ExternalTaskID and a persistent async store.
+	Status         executor.Status `json:"status,omitempty"`
+	ExternalTaskID string          `json:"external_task_id,omitempty"`
+	// Set either TTL or ExpireAt to limit callback waiting, or neither to wait
+	// indefinitely. TTL uses time.Duration, not a number of seconds.
+	TTL             time.Duration  `json:"ttl,omitempty"`
+	ExpireAt        time.Time      `json:"expire_at,omitempty,omitzero"`
 	NodeName        string         `json:"node_name,omitempty"`
 	Data            any            `json:"data,omitempty"`
 	Variables       map[string]any `json:"variables,omitempty"`

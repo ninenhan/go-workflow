@@ -77,6 +77,18 @@ func (e *Executor) Execute(ctx context.Context, task executor.ExecuteTask) (exec
 	if res == nil {
 		return executor.ExecuteResult{Status: executor.StatusSucceeded}, nil
 	}
+	status := res.Status
+	switch status {
+	case "":
+		status = executor.StatusSucceeded
+	case executor.StatusSucceeded, executor.StatusFailed, executor.StatusRetryable:
+	case executor.StatusAccepted, executor.StatusRunning:
+		if strings.TrimSpace(res.ExternalTaskID) == "" {
+			return executor.ExecuteResult{}, fmt.Errorf("unit %s async result missing external_task_id", unitName)
+		}
+	default:
+		return executor.ExecuteResult{}, fmt.Errorf("unit %s returned unsupported status: %s", unitName, status)
+	}
 
 	metadata := map[string]any{
 		"node_name": res.NodeName,
@@ -92,7 +104,12 @@ func (e *Executor) Execute(ctx context.Context, task executor.ExecuteTask) (exec
 	}
 
 	return executor.ExecuteResult{
-		Status:          executor.StatusSucceeded,
+		AwaitCallback:   status == executor.StatusAccepted || status == executor.StatusRunning,
+		TTL:             res.TTL,
+		ExpireAt:        res.ExpireAt,
+		Status:          status,
+		ExternalTaskID:  res.ExternalTaskID,
+		Error:           res.Error,
 		Output:          res.Data,
 		Variables:       cloneParams(res.Variables),
 		DeleteVariables: append([]string(nil), res.DeleteVariables...),

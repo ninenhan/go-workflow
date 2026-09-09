@@ -52,10 +52,15 @@ func (s *MemoryStore) SubmitAsyncResult(_ context.Context, dispatchID string, re
 		return false, ErrAsyncTaskCancelled
 	}
 	if task.State != AsyncTaskWaiting {
-		if task.ResultHash != hash {
-			return false, ErrAsyncResultConflict
+		if task.ResultHash == hash {
+			return false, nil
 		}
-		return false, nil
+	}
+	if !task.ExpireAt.IsZero() && !task.ExpireAt.After(time.Now().UTC()) {
+		return false, ErrAsyncTaskExpired
+	}
+	if task.State != AsyncTaskWaiting {
+		return false, ErrAsyncResultConflict
 	}
 	copy := result
 	task.Result = &copy
@@ -69,10 +74,22 @@ func (s *MemoryStore) ClaimCompletedAsyncTasks(_ context.Context, now time.Time,
 	if limit <= 0 || lease <= 0 {
 		return nil, errors.New("async claim limit and lease must be positive")
 	}
+	timeoutResult := executor.ExecuteResult{Status: executor.StatusFailed, Error: ErrAsyncTaskExpired.Error()}
+	_, timeoutHash, err := asyncResultPayload(timeoutResult)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	candidates := make([]*AsyncTask, 0)
 	for _, task := range s.asyncTasks {
+		if task.State == AsyncTaskWaiting && !task.ExpireAt.IsZero() && !task.ExpireAt.After(now) {
+			result := timeoutResult
+			task.Result = &result
+			task.ResultHash = timeoutHash
+			task.State = AsyncTaskCompleted
+			task.UpdatedAt = now.UTC()
+		}
 		if task.State == AsyncTaskCompleted || task.State == AsyncTaskClaimed && !task.ClaimUntil.After(now) {
 			candidates = append(candidates, task)
 		}
@@ -109,12 +126,13 @@ func (s *MemoryStore) AcknowledgeAsyncTask(ctx context.Context, dispatchID, clai
 func (s *MemoryStore) RenewAsyncTask(_ context.Context, dispatchID, claimToken string, claimUntil time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now().UTC()
 	task := s.asyncTasks[dispatchID]
-	if task == nil || task.State != AsyncTaskClaimed || task.ClaimToken != claimToken {
+	if claimToken == "" || !claimUntil.After(now) || task == nil || task.State != AsyncTaskClaimed || task.ClaimToken != claimToken || !task.ClaimUntil.After(now) {
 		return false, nil
 	}
 	lease := s.asyncRunLeases[task.RunID]
-	if lease.token != claimToken {
+	if lease.token != claimToken || !lease.until.After(now) {
 		return false, nil
 	}
 	task.ClaimUntil = claimUntil.UTC()
@@ -159,3 +177,53 @@ func (s *MemoryStore) CancelAsyncTasks(_ context.Context, runID string) error {
 }
 
 var _ AsyncTaskStore = (*MemoryStore)(nil)
+
+func (s *MemoryStore) CommitAsyncResult(ctx context.Context, task *AsyncTask, run *WorkflowRun, expectedUpdatedAt time.Time, snapshots []*RunSnapshot, events []RunEvent) error {
+	if task == nil || run == nil || task.Result == nil || task.ClaimToken == "" || task.RunID != run.ID {
+		return errors.New("async result commit is incomplete")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	stored := s.asyncTasks[task.DispatchID]
+	if stored != nil && stored.State == AsyncTaskCancelled {
+		return ErrAsyncTaskCancelled
+	}
+	lease := s.asyncRunLeases[task.RunID]
+	if stored == nil || stored.State != AsyncTaskClaimed || stored.ClaimToken != task.ClaimToken ||
+		!stored.ClaimUntil.After(now) || lease.token != task.ClaimToken || !lease.until.After(now) {
+		return ErrAsyncClaimLost
+	}
+	if stored.ResultApplied || stored.ResultHash != task.ResultHash {
+		return ErrAsyncResultConflict
+	}
+	if stored.RunID != task.RunID || stored.NodeID != task.NodeID {
+		return ErrAsyncRunChanged
+	}
+	if err := validateAsyncCommitRun(s.runs[run.ID], task, expectedUpdatedAt); err != nil {
+		return err
+	}
+	for _, snapshot := range snapshots {
+		if snapshot == nil || snapshot.RunID != run.ID {
+			return errors.New("async result snapshot does not match its run")
+		}
+	}
+	for _, event := range events {
+		if event.RunID != run.ID {
+			return errors.New("async result event does not match its run")
+		}
+	}
+	s.runs[run.ID] = run.Clone()
+	for _, snapshot := range snapshots {
+		s.snapshots[run.ID] = append(s.snapshots[run.ID], cloneSnapshot(snapshot))
+	}
+	s.events[run.ID] = append(s.events[run.ID], events...)
+	stored.ResultApplied = true
+	stored.UpdatedAt = now
+	return nil
+}
+
+var _ AsyncResultStore = (*MemoryStore)(nil)

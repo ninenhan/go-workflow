@@ -21,6 +21,8 @@ type asyncTaskRecord struct {
 	Task           datatypes.JSON `gorm:"type:json;not null"`
 	Result         datatypes.JSON `gorm:"type:json"`
 	ResultHash     string         `gorm:"type:varchar(64)"`
+	ResultApplied  bool           `gorm:"not null;default:false"`
+	ExpireAt       *time.Time     `gorm:"index"`
 	State          string         `gorm:"index;type:varchar(32);not null"`
 	ClaimToken     string         `gorm:"index;type:varchar(64)"`
 	ClaimUntil     *time.Time     `gorm:"index"`
@@ -50,13 +52,18 @@ func (s *GormStore) SaveAsyncTask(ctx context.Context, task *AsyncTask) error {
 		return fmt.Errorf("marshal async task: %w", err)
 	}
 	now := time.Now().UTC()
+	var expireAt *time.Time
+	if !task.ExpireAt.IsZero() {
+		deadline := task.ExpireAt.UTC()
+		expireAt = &deadline
+	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Table(s.asyncLeasesTable).Clauses(clause.OnConflict{DoNothing: true}).Create(&asyncRunLeaseRecord{RunID: task.RunID}).Error; err != nil {
 			return err
 		}
 		return tx.Table(s.asyncTasksTable).Clauses(clause.OnConflict{DoNothing: true}).Create(&asyncTaskRecord{
 			DispatchID: task.DispatchID, RunID: task.RunID, NodeID: task.NodeID,
-			ExternalTaskID: task.ExternalTaskID, Task: datatypes.JSON(payload),
+			ExternalTaskID: task.ExternalTaskID, Task: datatypes.JSON(payload), ExpireAt: expireAt,
 			State: string(AsyncTaskWaiting), CreatedAt: now, UpdatedAt: now,
 		}).Error
 	})
@@ -77,6 +84,7 @@ func (s *GormStore) SubmitAsyncResult(ctx context.Context, dispatchID string, re
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		updated := tx.Table(s.asyncTasksTable).
 			Where(map[string]any{"dispatch_id": dispatchID, "state": string(AsyncTaskWaiting)}).
+			Where("expire_at IS NULL OR expire_at > ?", time.Now().UTC()).
 			Updates(map[string]any{"result": datatypes.JSON(payload), "result_hash": hash, "state": string(AsyncTaskCompleted), "updated_at": time.Now().UTC()})
 		if updated.Error != nil {
 			return updated.Error
@@ -95,6 +103,13 @@ func (s *GormStore) SubmitAsyncResult(ctx context.Context, dispatchID string, re
 		if existing.State == string(AsyncTaskCancelled) {
 			return ErrAsyncTaskCancelled
 		}
+		// A result accepted before the deadline stays idempotent after it.
+		if existing.State != string(AsyncTaskWaiting) && existing.ResultHash == hash {
+			return nil
+		}
+		if existing.ExpireAt != nil && !existing.ExpireAt.After(time.Now().UTC()) {
+			return ErrAsyncTaskExpired
+		}
 		if existing.ResultHash != hash {
 			return ErrAsyncResultConflict
 		}
@@ -107,8 +122,22 @@ func (s *GormStore) ClaimCompletedAsyncTasks(ctx context.Context, now time.Time,
 	if limit <= 0 || lease <= 0 {
 		return nil, errors.New("async claim limit and lease must be positive")
 	}
+	timeoutResult := executor.ExecuteResult{Status: executor.StatusFailed, Error: ErrAsyncTaskExpired.Error()}
+	payload, hash, err := asyncResultPayload(timeoutResult)
+	if err != nil {
+		return nil, err
+	}
+	// Commit expiration independently of claiming. A crash between these steps
+	// leaves a completed result for the next instance to claim. Callback receipt
+	// competes on the same waiting-state predicate, so only one result can win.
+	if err := s.db.WithContext(ctx).Table(s.asyncTasksTable).
+		Where("state = ? AND expire_at <= ?", AsyncTaskWaiting, now.UTC()).
+		Updates(map[string]any{"result": datatypes.JSON(payload), "result_hash": hash,
+			"state": string(AsyncTaskCompleted), "updated_at": now.UTC()}).Error; err != nil {
+		return nil, err
+	}
 	claimed := make([]*AsyncTask, 0, limit)
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var candidates []asyncTaskRecord
 		if err := tx.Table(s.asyncTasksTable).
 			Where("state = ? OR (state = ? AND claim_until <= ?)", AsyncTaskCompleted, AsyncTaskClaimed, now).
@@ -143,6 +172,12 @@ func (s *GormStore) ClaimCompletedAsyncTasks(ctx context.Context, now time.Time,
 				_ = tx.Table(s.asyncLeasesTable).Where(map[string]any{"run_id": record.RunID, "claim_token": token}).Updates(map[string]any{"claim_token": "", "claim_until": nil}).Error
 				continue
 			}
+			// A candidate may have been committed by a previous owner while this
+			// transaction waited for the run lease. Read its current marker.
+			if err := tx.Table(s.asyncTasksTable).Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("dispatch_id = ?", record.DispatchID).First(&record).Error; err != nil {
+				return err
+			}
 			task, err := unmarshalAsyncTask(record)
 			if err != nil {
 				return err
@@ -162,24 +197,31 @@ func (s *GormStore) AcknowledgeAsyncTask(ctx context.Context, dispatchID, claimT
 }
 
 func (s *GormStore) RenewAsyncTask(ctx context.Context, dispatchID, claimToken string, claimUntil time.Time) (bool, error) {
+	now := time.Now().UTC()
+	if claimToken == "" || !claimUntil.After(now) {
+		return false, nil
+	}
 	renewed := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var record asyncTaskRecord
-		if err := tx.Table(s.asyncTasksTable).Where(map[string]any{"dispatch_id": dispatchID, "state": string(AsyncTaskClaimed), "claim_token": claimToken}).First(&record).Error; err != nil {
+		if err := tx.Table(s.asyncTasksTable).Where(map[string]any{"dispatch_id": dispatchID, "state": string(AsyncTaskClaimed), "claim_token": claimToken}).Where("claim_until > ?", now).First(&record).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil
 			}
 			return err
 		}
-		result := tx.Table(s.asyncLeasesTable).Where(map[string]any{"run_id": record.RunID, "claim_token": claimToken}).Update("claim_until", claimUntil.UTC())
+		result := tx.Table(s.asyncLeasesTable).Where(map[string]any{"run_id": record.RunID, "claim_token": claimToken}).Where("claim_until > ?", now).Update("claim_until", claimUntil.UTC())
 		if result.Error != nil || result.RowsAffected != 1 {
 			return result.Error
 		}
-		result = tx.Table(s.asyncTasksTable).Where(map[string]any{"dispatch_id": dispatchID, "state": string(AsyncTaskClaimed), "claim_token": claimToken}).Update("claim_until", claimUntil.UTC())
+		result = tx.Table(s.asyncTasksTable).Where(map[string]any{"dispatch_id": dispatchID, "state": string(AsyncTaskClaimed), "claim_token": claimToken}).Where("claim_until > ?", now).Update("claim_until", claimUntil.UTC())
 		if result.Error != nil {
 			return result.Error
 		}
-		renewed = result.RowsAffected == 1
+		if result.RowsAffected != 1 {
+			return ErrAsyncClaimLost
+		}
+		renewed = true
 		return nil
 	})
 	return renewed, err
@@ -226,7 +268,97 @@ func unmarshalAsyncTask(record asyncTaskRecord) (*AsyncTask, error) {
 	if err := json.Unmarshal(record.Result, &result); err != nil {
 		return nil, fmt.Errorf("unmarshal async result: %w", err)
 	}
-	return &AsyncTask{DispatchID: record.DispatchID, RunID: record.RunID, NodeID: record.NodeID, ExternalTaskID: record.ExternalTaskID, Task: task, Result: &result, ResultHash: record.ResultHash, State: AsyncTaskState(record.State), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}, nil
+	var expireAt time.Time
+	if record.ExpireAt != nil {
+		expireAt = record.ExpireAt.UTC()
+	}
+	return &AsyncTask{DispatchID: record.DispatchID, RunID: record.RunID, NodeID: record.NodeID, ExternalTaskID: record.ExternalTaskID, Task: task, Result: &result, ResultHash: record.ResultHash, ResultApplied: record.ResultApplied, ExpireAt: expireAt, State: AsyncTaskState(record.State), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}, nil
 }
 
 var _ AsyncTaskStore = (*GormStore)(nil)
+
+func (s *GormStore) CommitAsyncResult(ctx context.Context, task *AsyncTask, run *WorkflowRun, expectedUpdatedAt time.Time, snapshots []*RunSnapshot, events []RunEvent) error {
+	if s == nil || s.db == nil {
+		return errors.New("gorm store is not configured")
+	}
+	if task == nil || run == nil || task.Result == nil || task.ClaimToken == "" || task.RunID != run.ID {
+		return errors.New("async result commit is incomplete")
+	}
+	record, err := marshalRun(run)
+	if err != nil {
+		return err
+	}
+	snapshotRecords := make([]*runSnapshotRecord, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if snapshot == nil || snapshot.RunID != run.ID {
+			return errors.New("async result snapshot does not match its run")
+		}
+		value, err := marshalSnapshot(snapshot)
+		if err != nil {
+			return err
+		}
+		snapshotRecords = append(snapshotRecords, value)
+	}
+	eventRecords := make([]*runEventRecord, 0, len(events))
+	for _, event := range events {
+		if event.RunID != run.ID {
+			return errors.New("async result event does not match its run")
+		}
+		value, err := marshalEvent(event)
+		if err != nil {
+			return err
+		}
+		eventRecords = append(eventRecords, value)
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var lease asyncRunLeaseRecord
+		if err := tx.Table(s.asyncLeasesTable).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("run_id = ? AND claim_token = ? AND claim_until > ?", run.ID, task.ClaimToken, time.Now().UTC()).First(&lease).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrAsyncClaimLost
+			}
+			return err
+		}
+		now := time.Now().UTC()
+		if lease.ClaimUntil == nil || !lease.ClaimUntil.After(now) {
+			return ErrAsyncClaimLost
+		}
+		applied := tx.Table(s.asyncTasksTable).
+			Where("dispatch_id = ? AND run_id = ? AND node_id = ? AND state = ? AND claim_token = ? AND claim_until > ? AND result_applied = ? AND result_hash = ?",
+				task.DispatchID, task.RunID, task.NodeID, AsyncTaskClaimed, task.ClaimToken, now, false, task.ResultHash).
+			Updates(map[string]any{"result_applied": true, "updated_at": now})
+		if applied.Error != nil {
+			return applied.Error
+		}
+		if applied.RowsAffected != 1 {
+			return ErrAsyncClaimLost
+		}
+		var current workflowRunRecord
+		if err := tx.Table(s.runsTable).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", run.ID).First(&current).Error; err != nil {
+			return err
+		}
+		currentRun, err := unmarshalRun(current)
+		if err != nil {
+			return err
+		}
+		if err := validateAsyncCommitRun(currentRun, task, expectedUpdatedAt); err != nil {
+			return err
+		}
+		if err := tx.Table(s.runsTable).Where("id = ?", run.ID).Select("*").Updates(record).Error; err != nil {
+			return err
+		}
+		if len(snapshotRecords) > 0 {
+			if err := tx.Table(s.snapshotsTable).Create(&snapshotRecords).Error; err != nil {
+				return err
+			}
+		}
+		if len(eventRecords) > 0 {
+			if err := tx.Table(s.eventsTable).Create(&eventRecords).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+var _ AsyncResultStore = (*GormStore)(nil)

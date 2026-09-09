@@ -14,11 +14,11 @@ import (
 )
 
 type GormStore struct {
-	db             *gorm.DB
-	runsTable      string
-	snapshotsTable string
-	eventsTable    string
-	asyncTasksTable string
+	db               *gorm.DB
+	runsTable        string
+	snapshotsTable   string
+	eventsTable      string
+	asyncTasksTable  string
 	asyncLeasesTable string
 }
 
@@ -36,7 +36,7 @@ type workflowRunRecord struct {
 	NodeRuns           datatypes.JSON `gorm:"type:json"`
 	Context            datatypes.JSON `gorm:"type:json"`
 	CreatedAt          time.Time      `gorm:"index"`
-	UpdatedAt          time.Time      `gorm:"index"`
+	UpdatedAt          time.Time      `gorm:"index;autoUpdateTime:false"`
 	StartedAt          *time.Time
 	FinishedAt         *time.Time
 }
@@ -85,11 +85,11 @@ func NewGormStoreWithTablePrefix(db *gorm.DB, tablePrefix string) (*GormStore, e
 		return nil, fmt.Errorf("configure runtime store: %w", err)
 	}
 	store := &GormStore{
-		db:             db,
-		runsTable:      gormdb.TableName(tablePrefix, workflowRunRecord{}.TableName()),
-		snapshotsTable: gormdb.TableName(tablePrefix, runSnapshotRecord{}.TableName()),
-		eventsTable:    gormdb.TableName(tablePrefix, runEventRecord{}.TableName()),
-		asyncTasksTable: gormdb.TableName(tablePrefix, asyncTaskRecord{}.TableName()),
+		db:               db,
+		runsTable:        gormdb.TableName(tablePrefix, workflowRunRecord{}.TableName()),
+		snapshotsTable:   gormdb.TableName(tablePrefix, runSnapshotRecord{}.TableName()),
+		eventsTable:      gormdb.TableName(tablePrefix, runEventRecord{}.TableName()),
+		asyncTasksTable:  gormdb.TableName(tablePrefix, asyncTaskRecord{}.TableName()),
 		asyncLeasesTable: gormdb.TableName(tablePrefix, asyncRunLeaseRecord{}.TableName()),
 	}
 	for _, migration := range []struct {

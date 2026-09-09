@@ -96,21 +96,40 @@ func (s *Service) processCompletedAsyncTasks(ctx context.Context) {
 
 func (s *Service) processCompletedAsyncTask(ctx context.Context, task *wfruntime.AsyncTask) error {
 	store := s.store.(wfruntime.AsyncTaskStore)
-	if _, active := s.activeRunCancels.Load(task.RunID); active {
-		return errors.New("run is still active")
+	runCtx, cancel := context.WithCancel(ctx)
+	if _, loaded := s.activeRunCancels.LoadOrStore(task.RunID, cancel); loaded {
+		cancel()
+		return errors.New("run is already active")
 	}
-	run, err := s.store.LoadRun(ctx, task.RunID)
+	defer cancel()
+	defer s.activeRunCancels.Delete(task.RunID)
+	// Result application can include retry backoff. Own and renew the claim
+	// before applying it, not only while executing its successors.
+	renewed, err := store.RenewAsyncTask(runCtx, task.DispatchID, task.ClaimToken, time.Now().Add(continuationClaimLease))
 	if err != nil {
 		return err
 	}
-	if run.Status == wfruntime.StatusCancelled {
-		return store.AcknowledgeAsyncTask(ctx, task.DispatchID, task.ClaimToken)
+	if !renewed {
+		return wfruntime.ErrAsyncClaimLost
+	}
+	heartbeatDone := make(chan struct{})
+	defer close(heartbeatDone)
+	go s.renewAsyncClaim(runCtx, cancel, store, task, heartbeatDone)
+	run, err := s.store.LoadRun(runCtx, task.RunID)
+	if err != nil {
+		return err
+	}
+	if wfruntime.IsTerminal(run.Status) {
+		return store.AcknowledgeAsyncTask(runCtx, task.DispatchID, task.ClaimToken)
+	}
+	if run.Status == wfruntime.StatusPaused {
+		return runner.ErrRunPaused
 	}
 	nodeRun := run.NodeRuns[task.NodeID]
-	if nodeRun == nil || nodeRun.DispatchID != task.DispatchID {
+	if !task.ResultApplied && (nodeRun == nil || nodeRun.DispatchID != task.DispatchID) {
 		return errors.New("async task no longer matches its run")
 	}
-	version, err := s.definitions.GetVersion(ctx, run.WorkflowVersionID)
+	version, err := s.definitions.GetVersion(runCtx, run.WorkflowVersionID)
 	if err != nil {
 		return err
 	}
@@ -118,38 +137,31 @@ func (s *Service) processCompletedAsyncTask(ctx context.Context, task *wfruntime
 	if err != nil {
 		return err
 	}
-	if nodeRun.Status == wfruntime.StatusWaiting {
-		if run.Status != wfruntime.StatusWaiting {
+	if !task.ResultApplied && (nodeRun.Status == wfruntime.StatusWaiting || nodeRun.Status == wfruntime.StatusRunning) {
+		if nodeRun.Status == wfruntime.StatusWaiting && run.Status != wfruntime.StatusWaiting {
 			return errors.New("run has not released its active execution yet")
 		}
 		continuationScheduler, ok := s.engine.Scheduler.(*runner.DefaultScheduler)
 		if !ok {
 			return errors.New("configured scheduler does not support async continuation")
 		}
-		if err := continuationScheduler.ApplyAsyncResult(ctx, plan, run, task); err != nil {
+		if err := continuationScheduler.ApplyAsyncResult(runCtx, plan, run, task); err != nil {
 			return err
 		}
-	} else if !wfruntime.IsTerminal(nodeRun.Status) {
+	} else if !task.ResultApplied && !wfruntime.IsTerminal(nodeRun.Status) {
 		return errors.New("async node is not ready for continuation")
 	}
 	if wfruntime.IsTerminal(run.Status) {
-		return store.AcknowledgeAsyncTask(ctx, task.DispatchID, task.ClaimToken)
+		return store.AcknowledgeAsyncTask(runCtx, task.DispatchID, task.ClaimToken)
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	if _, loaded := s.activeRunCancels.LoadOrStore(run.ID, cancel); loaded {
-		cancel()
-		return errors.New("run is already active")
+	if err := runCtx.Err(); err != nil {
+		return err
 	}
-	defer cancel()
-	defer s.activeRunCancels.Delete(run.ID)
-	heartbeatDone := make(chan struct{})
-	go s.renewAsyncClaim(runCtx, cancel, store, task, heartbeatDone)
 	_, runErr := s.engine.Scheduler.Run(runCtx, plan, run)
-	close(heartbeatDone)
 	if runErr != nil {
 		return runErr
 	}
-	return store.AcknowledgeAsyncTask(ctx, task.DispatchID, task.ClaimToken)
+	return store.AcknowledgeAsyncTask(runCtx, task.DispatchID, task.ClaimToken)
 }
 
 func (s *Service) renewAsyncClaim(ctx context.Context, cancel context.CancelFunc, store wfruntime.AsyncTaskStore, task *wfruntime.AsyncTask, done <-chan struct{}) {

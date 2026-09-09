@@ -53,6 +53,15 @@ type ExecuteTask struct {
 }
 
 type ExecuteResult struct {
+	// AwaitCallback opts asynchronous results into durable callback delivery,
+	// including through remote executors that also expose the legacy Poll API.
+	// Without it, AsyncExecutor implementations retain their polling contract.
+	AwaitCallback bool `json:"await_callback,omitempty"`
+	// TTL and ExpireAt are mutually exclusive callback deadlines. TTL is a
+	// duration (nanoseconds in JSON); ExpireAt is an absolute RFC3339 timestamp.
+	// Both zero means unlimited waiting. They do not change execution Timeout.
+	TTL             time.Duration  `json:"ttl,omitempty"`
+	ExpireAt        time.Time      `json:"expire_at,omitempty,omitzero"`
 	Status          Status         `json:"status,omitempty"`
 	Output          any            `json:"output,omitempty"`
 	Variables       map[string]any `json:"variables,omitempty"`
@@ -117,6 +126,24 @@ func (r ExecuteResult) NormalizedStatus() Status {
 		return StatusFailed
 	}
 	return StatusSucceeded
+}
+
+// CallbackExpireAt resolves a relative TTL once, before persisting the wait.
+func (r ExecuteResult) CallbackExpireAt(now time.Time) (time.Time, error) {
+	if r.TTL < 0 {
+		return time.Time{}, errors.New("callback ttl must not be negative")
+	}
+	if r.TTL > 0 && !r.ExpireAt.IsZero() {
+		return time.Time{}, errors.New("callback ttl and expire_at are mutually exclusive")
+	}
+	expireAt := r.ExpireAt
+	if r.TTL > 0 {
+		expireAt = now.Add(r.TTL)
+	}
+	if !expireAt.IsZero() && (expireAt.Year() < 1 || expireAt.Year() > 9999) {
+		return time.Time{}, errors.New("callback expire_at is outside the supported timestamp range")
+	}
+	return expireAt.UTC(), nil
 }
 
 func (t ExecuteTask) Validate() error {
